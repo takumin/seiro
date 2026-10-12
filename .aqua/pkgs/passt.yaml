@@ -1,0 +1,5 @@
+---
+packages:
+- name: takumin/passt-bin@v2026.10.2
+  tags:
+  - vm

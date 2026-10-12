@@ -1,0 +1,113 @@
+---
+name: Build
+on:
+  workflow_call:
+permissions: {}
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+jobs:
+  matrix:
+    name: Matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      targets: ${{ steps.matrix.outputs.result }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+        sparse-checkout: |-
+          .aqua
+          scripts
+          tasks
+    - name: Setup aqua
+      uses: aquaproj/aqua-installer@82d0e83878a8657c4a6f2ff1755d3bfbfc67f329 # v4.1.0
+      with:
+        aqua_version: v2.64.0
+    - name: Generate Matrix
+      id: matrix
+      run: echo "result=$(task build:matrix)" >> "$GITHUB_OUTPUT"
+    - name: Check Matrix
+      env:
+        BUILD_MATRIX: ${{ steps.matrix.outputs.result }}
+      run: |-
+        echo "${BUILD_MATRIX}" | jq
+  build:
+    needs: matrix
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.matrix.outputs.targets) }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - name: Setup aqua
+      uses: aquaproj/aqua-installer@82d0e83878a8657c4a6f2ff1755d3bfbfc67f329 # v4.1.0
+      with:
+        aqua_version: v2.64.0
+    - name: Restore go mod cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        key: deps-${{ hashFiles('**/go.sum') }}
+        restore-keys: |-
+          deps-
+        path: ~/go/pkg/mod/
+    - name: Restore aqua cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        key: aqua-${{ hashFiles('.aqua/**/*.yaml', '.aqua/**/*.yml') }}
+        restore-keys: |-
+          aqua-
+        path: ~/.local/share/aquaproj-aqua/
+    - name: Restore go build cache
+      id: go-build
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        key: go-build-build-${{ matrix.target }}-${{ hashFiles('**/go.sum') }}
+        restore-keys: |-
+          go-build-build-${{ matrix.target }}-
+        path: ~/.cache/go-build
+    - name: Setup build
+      run: |-
+        task setup:build
+      env:
+        BUILD_TARGET: ${{ matrix.target }}
+    - name: Build ${{ matrix.target }}
+      run: |-
+        task build:build
+      env:
+        BUILD_TARGET: ${{ matrix.target }}
+    - name: Generate sha256sum
+      run: |-
+        task build:sha256sum
+      env:
+        BUILD_TARGET: ${{ matrix.target }}
+    - name: Verify sha256sum
+      run: |-
+        task build:sha256sum:verify
+      env:
+        BUILD_TARGET: ${{ matrix.target }}
+    - name: Upload artifact
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: build-${{ matrix.target }}
+        path: dist/
+    - name: Save go build cache
+      if: github.ref == 'refs/heads/main' && steps.go-build.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        key: ${{ steps.go-build.outputs.cache-primary-key }}
+        path: ~/.cache/go-build

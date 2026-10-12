@@ -1,0 +1,34 @@
+---
+# https://taskfile.dev
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  setup:
+    taskfile: setup.task.yml
+    internal: true
+
+tasks:
+  default:
+    desc: '{{.TASK}}'
+    silent: true
+    cmds:
+    - task: go
+
+  go:
+    desc: '{{.TASK}}'
+    dir: '{{.ROOT_DIR}}'
+    deps:
+    - task: setup:test
+    sources:
+    - 'go.mod'
+    - 'go.sum'
+    - '**/*.go'
+    - exclude: '**/*_test.go'
+    generates:
+    - .task/.done_{{.TASK}}
+    cmds:
+    - go generate ./...
+    - cmd: touch .task/.done_{{.TASK}}
+      silent: true

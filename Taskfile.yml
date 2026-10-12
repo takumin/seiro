@@ -1,0 +1,30 @@
+---
+# https://taskfile.dev
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  tool: ./tasks/tool.task.yml
+  setup: ./tasks/setup.task.yml
+  format: ./tasks/format.task.yml
+  generate: ./tasks/generate.task.yml
+  reviewdog: ./tasks/reviewdog.task.yml
+  audit: ./tasks/audit.task.yml
+  test: ./tasks/test.task.yml
+  coverage: ./tasks/coverage.task.yml
+  build: ./tasks/build.task.yml
+  install: ./tasks/install.task.yml
+
+tasks:
+  default:
+    desc: '{{.TASK}}'
+    silent: true
+    aliases: [all]
+    cmds:
+    - task: tool
+    - task: format
+    - task: generate
+    - task: reviewdog
+    - task: test
+    - task: build

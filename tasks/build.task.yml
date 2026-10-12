@@ -1,0 +1,103 @@
+---
+# https://taskfile.dev
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+vars:
+  PKGNAME:
+    sh: sed -n -E 's/^module[[:space:]]+//p' go.mod
+  PROJNAME: '{{base .PKGNAME}}'
+
+  RAW_VERSION:
+    sh: git describe --tags --abbrev=0 2>/dev/null || echo 'v0.0.0'
+  COMMIT_ID:
+    sh: git rev-parse HEAD 2>/dev/null || exit 0
+
+  VERSION: '{{trimPrefix "v" .RAW_VERSION}}'
+  REVISION: '{{.COMMIT_ID}}'
+  PRERELEASE: '{{.PRERELEASE | default "dev" .PRERELEASE}}'
+
+  LDFLAGS_VERSION: -X "{{.PKGNAME}}/internal/version.version={{.VERSION}}"
+  LDFLAGS_REVISION: -X "{{.PKGNAME}}/internal/version.revision={{.REVISION}}"
+  LDFLAGS_PRERELEASE: -X "{{.PKGNAME}}/internal/version.prerelease={{.PRERELEASE}}"
+  LDFLAGS_VARIABLES: '{{.LDFLAGS_VERSION}} {{.LDFLAGS_REVISION}} {{.LDFLAGS_PRERELEASE}}'
+  BUILDFLAGS: -trimpath -ldflags '-s -w -buildid= {{.LDFLAGS_VARIABLES}} -extldflags -static'
+
+  # <GOOS>-<GOARCH>
+  TARGET: '{{env "BUILD_TARGET" | default (printf "%s-%s" OS ARCH)}}'
+  # cloud-hypervisor runs on Linux/KVM only.
+  MATRIX_TARGETS:
+  - linux-amd64
+  - linux-arm64
+
+includes:
+  setup:
+    taskfile: setup.task.yml
+    internal: true
+
+tasks:
+  default:
+    desc: '{{.TASK}}'
+    silent: true
+    cmds:
+    - task: build
+    - task: sha256sum
+
+  matrix:
+    desc: '{{.TASK}}'
+    silent: true
+    cmds:
+    - echo '{{ .MATRIX_TARGETS | toJson }}' | jq -cM -f scripts/build-matrix.jq
+
+  build:
+    desc: '{{.TASK}}'
+    dir: '{{.ROOT_DIR}}'
+    label: build:{{.TARGET}}
+    deps:
+    - task: setup:build
+    sources:
+    - 'go.mod'
+    - 'go.sum'
+    - '**/*.go'
+    - exclude: '**/*_test.go'
+    generates:
+    - dist/{{.ARTIFACT}}
+    vars:
+      GOOS: '{{splitList "-" .TARGET | first}}'
+      GOARCH: '{{splitList "-" .TARGET | last}}'
+      ARTIFACT: '{{.PROJNAME}}-{{.TARGET}}{{if eq .GOOS "windows"}}.exe{{end}}'
+    env:
+      CGO_ENABLED: 0
+      GOOS: '{{.GOOS}}'
+      GOARCH: '{{.GOARCH}}'
+    cmds:
+    - go build {{.BUILDFLAGS}} -o dist/{{.ARTIFACT}}
+
+  sha256sum:
+    desc: '{{.TASK}}'
+    label: sha256sum:{{.TARGET}}
+    dir: '{{.ROOT_DIR}}/dist'
+    deps:
+    - task: setup:build
+    - task: build
+    vars:
+      ARTIFACT: '{{.PROJNAME}}-{{.TARGET}}{{if hasPrefix "windows-" .TARGET}}.exe{{end}}'
+    sources:
+    - '{{.ARTIFACT}}'
+    generates:
+    - '{{.ARTIFACT}}.sha256sum'
+    cmds:
+    - coreutils sha256sum "{{.ARTIFACT}}" > "{{.ARTIFACT}}.sha256sum"
+
+  sha256sum:verify:
+    desc: '{{.TASK}}'
+    label: sha256sum:verify:{{.TARGET}}
+    dir: '{{.ROOT_DIR}}/dist'
+    deps:
+    - task: setup:build
+    - task: sha256sum
+    vars:
+      ARTIFACT: '{{.PROJNAME}}-{{.TARGET}}{{if hasPrefix "windows-" .TARGET}}.exe{{end}}'
+    cmds:
+    - coreutils sha256sum -c "{{.ARTIFACT}}.sha256sum"

@@ -1,0 +1,48 @@
+# vim: ft=starlark :
+
+ubuntu = image(
+    url = "https://cloud-images.ubuntu.com/releases/26.04/release-20260927/ubuntu-26.04-server-cloudimg-amd64.img",
+    sha256 = "8800651811af9a85465ad1d552add729947bb16488dddb4a9b5305a3d97332b2",
+)
+
+users = [{
+    "name": "ops",
+    "sudo": "ALL=(ALL) NOPASSWD:ALL",
+    "shell": "/bin/bash",
+    "ssh_authorized_keys": [file("~/.ssh/authorized_keys")],
+}]
+
+machine(
+    name = "web",
+    disks = [
+        disk(image = ubuntu, size = "8GiB"),
+    ],
+    nics = [
+        nic("eth0", network = internet),
+    ],
+    ports = [
+        port(host = 8080, guest = 80),
+    ],
+    cloud_init = cloud_init(user_data = {
+        "users": users,
+        "packages": ["nginx"],
+    }),
+)
+
+machine(
+    name = "db",
+    cpus = 2,
+    memory = "2GiB",
+    disks = [
+        disk(image = ubuntu, size = "8GiB"),
+        disk(size = "10GiB"),
+    ],
+    nics = [
+        nic("eth0", network = internet),
+    ],
+    cloud_init = cloud_init(user_data = {
+        "users": users,
+        "fs_setup": [{"device": "/dev/vdb", "filesystem": "ext4", "label": "data"}],
+        "mounts": [["LABEL=data", "/var/lib/data"]],
+    }),
+)

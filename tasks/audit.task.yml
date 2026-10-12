@@ -1,0 +1,31 @@
+---
+# https://taskfile.dev
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  tool:
+    taskfile: tool.task.yml
+    internal: true
+
+tasks:
+  default:
+    desc: '{{.TASK}}'
+    silent: true
+    cmds:
+    - task: advisories
+
+  # Go vulnerability database scan. Time-dependent (the database changes without
+  # any local change), so it is never cached — always re-run. Not part of the
+  # default `task all` pipeline; it runs in the required `audit` gate on every
+  # PR and push to main (see .github/workflows/wc-audit.yml).
+  advisories:
+    desc: '{{.TASK}}'
+    dir: '{{.ROOT_DIR}}'
+    deps:
+    - task: tool:aqua:tag:go
+    - task: tool:aqua:tag:govulncheck
+    - task: tool:go:mod
+    cmds:
+    - govulncheck ./...

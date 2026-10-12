@@ -1,0 +1,5 @@
+---
+packages:
+- name: rust-lang/mdBook@v0.5.4
+  tags:
+  - mdbook

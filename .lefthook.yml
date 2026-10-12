@@ -1,0 +1,53 @@
+---
+pre-commit:
+  commands:
+    pinact:
+      glob: ".github/**/*.{yaml,yml}"
+      run: pinact run {staged_files}
+      stage_fixed: true
+    ghalint-act:
+      glob: ".github/actions/*/*.{yaml,yml}"
+      run: ghalint act {staged_files}
+      stage_fixed: true
+    ghalint-run:
+      glob: ".github/workflows/*.{yaml,yml}"
+      run: ghalint run {staged_files}
+      stage_fixed: true
+    jactionlint:
+      glob: ".github/workflows/*.{yaml,yml}"
+      run: jactionlint {staged_files}
+      stage_fixed: true
+    shfmt:
+      glob: "*.{sh,bash}"
+      run: shfmt -w {staged_files}
+      stage_fixed: true
+    shellcheck:
+      glob: "*.{sh,bash}"
+      run: shellcheck {staged_files}
+      stage_fixed: true
+    biome:
+      glob: "*.{json}"
+      run: biome lint --no-errors-on-unmatched {staged_files}
+    yamllint:
+      glob: "*.{yaml,yml}"
+      run: yamllint {staged_files}
+    yamlfmt:
+      glob: "*.{yaml,yml}"
+      run: yamlfmt {staged_files}
+      stage_fixed: true
+    gofmt:
+      glob: "*.{go}"
+      run: gofmt -s -w {staged_files}
+      stage_fixed: true
+    gosec:
+      glob: "*.{go}"
+      run: gosec -quiet {staged_files}
+      stage_fixed: true
+    govet:
+      files: git ls-files -m
+      glob: "*.{go}"
+      run: go vet ./...
+    golangci-lint:
+      files: git ls-files -m
+      glob: "*.{go}"
+      run: golangci-lint run ./...

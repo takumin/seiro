@@ -1,0 +1,44 @@
+---
+# https://taskfile.dev
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+vars:
+  PKGNAME:
+    sh: sed -n -E 's/^module[[:space:]]+//p' go.mod
+  PROJNAME: '{{base .PKGNAME}}'
+  # Always the host platform: an installed binary must run here, so
+  # BUILD_TARGET (used for cross builds) is deliberately ignored.
+  HOST_TARGET: '{{printf "%s-%s" OS ARCH}}'
+  INSTALL_DIR: '{{env "INSTALL_DIR" | default (printf "%s/.local/bin" (env "HOME"))}}'
+
+includes:
+  build:
+    taskfile: build.task.yml
+    dir: ../
+    internal: true
+
+tasks:
+  default:
+    desc: '{{.TASK}}'
+    silent: true
+    cmds:
+    - task: install
+
+  install:
+    desc: '{{.TASK}}'
+    dir: '{{.ROOT_DIR}}'
+    deps:
+    - task: build:build
+      vars:
+        TARGET: '{{.HOST_TARGET}}'
+    cmds:
+    - install -D -m 0755 dist/{{.PROJNAME}}-{{.HOST_TARGET}} {{.INSTALL_DIR}}/{{.PROJNAME}}
+    - cmd: echo 'installed {{.INSTALL_DIR}}/{{.PROJNAME}}'
+      silent: true
+
+  uninstall:
+    desc: '{{.TASK}}'
+    cmds:
+    - rm -f {{.INSTALL_DIR}}/{{.PROJNAME}}
