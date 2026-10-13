@@ -117,6 +117,44 @@ machine(name = "c", disks = [disk(image = img, size = "10GiB")], tweaks = False)
 	}
 }
 
+func TestEvalLive(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, seirofile.Name)
+	env, err := seirofile.Eval(path, []byte(`
+build = "releases/amd64"
+machine(
+	name = "live",
+	boot = live(
+		kernel = image(path = build + "/vmlinuz"),
+		initrd = image(path = "/abs/../abs/initrd.img"),
+		rootfs = image(url = "https://example.com/rootfs.squashfs"),
+		cmdline = "anynet",
+	),
+)
+`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m := env.Machines[0]
+	want := &spec.Live{
+		Kernel:  &spec.Image{Path: filepath.Join(dir, "releases/amd64/vmlinuz")},
+		Initrd:  &spec.Image{Path: "/abs/initrd.img"},
+		Rootfs:  &spec.Image{URL: "https://example.com/rootfs.squashfs"},
+		Cmdline: "anynet",
+	}
+	if m.Live == nil || *m.Live.Kernel != *want.Kernel || *m.Live.Initrd != *want.Initrd || *m.Live.Rootfs != *want.Rootfs || m.Live.Cmdline != want.Cmdline {
+		t.Errorf("live = %+v, want %+v", m.Live, want)
+	}
+	if len(m.Disks) != 0 {
+		t.Errorf("disks = %+v, want none", m.Disks)
+	}
+	if err := env.Validate(); err != nil {
+		t.Errorf("unexpected validation error: %v", err)
+	}
+}
+
 func TestEvalCloudInitString(t *testing.T) {
 	t.Parallel()
 
@@ -153,7 +191,6 @@ func TestEvalErrors(t *testing.T) {
 		"unknown builtin":   {src: `vm()`, want: "undefined: vm"},
 		"network":           {src: `network("pxe")`, want: "planned for phase 3"},
 		"load":              {src: `load("x.star", "y")`, want: "load() is not supported yet"},
-		"missing disks":     {src: `machine(name = "a")`, want: "missing argument for disks"},
 		"bad memory":        {src: `machine(name = "a", memory = "1GB", disks = [])`, want: `machine "a": memory: invalid size`},
 		"disks element":     {src: `machine(name = "a", disks = ["x"])`, want: "disks must contain disk() values, got string"},
 		"nics element":      {src: `machine(name = "a", disks = [], nics = [1])`, want: "nics must contain nic() values"},
@@ -162,6 +199,12 @@ func TestEvalErrors(t *testing.T) {
 		"disk image type":   {src: `disk(image = "x", size = "1GiB")`, want: "image must be an image()"},
 		"disk size":         {src: `disk(size = "big")`, want: "invalid size"},
 		"image url":         {src: `image(url = "ftp://x")`, want: "url must start with"},
+		"image source":      {src: `image()`, want: "url or path is required"},
+		"image both":        {src: `image(url = "https://x", path = "x")`, want: "url and path cannot both be set"},
+		"boot type":         {src: `machine(name = "a", boot = img)`, want: "boot must be a live(), got image"},
+		"live kernel":       {src: `live(kernel = "vmlinuz", rootfs = img)`, want: `"kernel": got string, want image`},
+		"live rootfs":       {src: `live(kernel = img)`, want: "missing argument for rootfs"},
+		"live initrd":       {src: `live(kernel = img, rootfs = img, initrd = "x")`, want: "initrd must be an image()"},
 		"nic network":       {src: `nic("eth0", network = "internet")`, want: "network must be a network"},
 		"port range":        {src: `port(host = 70000, guest = 22)`, want: "must be between 1 and 65535"},
 		"user_data type":    {src: `cloud_init(user_data = 1)`, want: "user_data must be a dict or a string"},

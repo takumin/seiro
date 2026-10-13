@@ -30,8 +30,9 @@ type Image struct {
 type Resources struct {
 	CloudHypervisor string
 	Passt           string
-	Firmware        string
-	// Images maps spec.Image.CacheKey() to the cached image.
+	// Firmware is only needed by machines that boot from a disk.
+	Firmware string
+	// Images maps spec.Image.Key() to the resolved image.
 	Images map[string]Image
 	// HostKey is the SSH host key of the machine being planned. It is
 	// required when the machine declares cloud_init.
@@ -46,12 +47,17 @@ const GuestCID = 3
 // which systemd-ssh-generator (systemd 256 and later) may already claim.
 const SSHVSockPort = 10022
 
+// RootfsSerial is the virtio serial of the live root image, by which the
+// initrd finds it whatever disks precede it.
+const RootfsSerial = "seiro-rootfs"
+
 // Machine is the realization of a declared machine. It is written to plan.json
 // by up and read by the supervisor.
 type Machine struct {
 	Env           string        `json:"env"`
 	Name          string        `json:"name"`
 	Spec          *spec.Machine `json:"spec"`
+	Boot          *Boot         `json:"boot,omitempty"`
 	Disks         []Disk        `json:"disks"`
 	Seed          *Seed         `json:"seed,omitempty"`
 	NICs          []NIC         `json:"nics"`
@@ -73,6 +79,15 @@ type Disk struct {
 	Format  string `json:"format"`
 	Size    uint64 `json:"size"`
 	Backing string `json:"backing,omitempty"`
+}
+
+// Boot is a direct kernel boot. Machines without it boot the firmware.
+type Boot struct {
+	Kernel  string `json:"kernel"`
+	Initrd  string `json:"initrd,omitempty"`
+	Cmdline string `json:"cmdline"`
+	// Rootfs is the read-only root image of a live boot.
+	Rootfs string `json:"rootfs"`
 }
 
 // Seed is the cloud-init seed attached to the VM.
@@ -122,14 +137,22 @@ func Build(e *env.Env, m *spec.Machine, res Resources) (*Machine, error) {
 		RuntimeDir:    paths.Runtime,
 	}
 
+	if m.Live != nil {
+		boot, err := liveBoot(m, res)
+		if err != nil {
+			return nil, err
+		}
+		p.Boot = boot
+	}
+
 	for i, d := range m.Disks {
 		if d.Image == nil {
 			p.Disks = append(p.Disks, Disk{Path: paths.Disk(i, disk.FormatRaw), Format: disk.FormatRaw, Size: d.Size})
 			continue
 		}
-		img, ok := res.Images[d.Image.CacheKey()]
+		img, ok := res.Images[d.Image.Key()]
 		if !ok {
-			return nil, fmt.Errorf("machine %q: disk %d: image %s is not available", m.Name, i, d.Image.URL)
+			return nil, fmt.Errorf("machine %q: disk %d: image %s is not available", m.Name, i, d.Image.Source())
 		}
 		if d.Size < img.Info.VirtualSize {
 			return nil, fmt.Errorf("machine %q: disk %d: size %s is smaller than the image (%s)",
@@ -174,6 +197,52 @@ func Build(e *env.Env, m *spec.Machine, res Resources) (*Machine, error) {
 
 	p.VMM = Process{Path: res.CloudHypervisor, Args: VMMArgs(p, m, res.Firmware), Log: paths.VMMLog()}
 	return p, nil
+}
+
+// liveBoot plans the direct kernel boot of a live machine.
+func liveBoot(m *spec.Machine, res Resources) (*Boot, error) {
+	resolve := func(what string, img *spec.Image) (Image, error) {
+		r, ok := res.Images[img.Key()]
+		if !ok {
+			return r, fmt.Errorf("machine %q: live: %s %s is not available", m.Name, what, img.Source())
+		}
+		return r, nil
+	}
+	kernel, err := resolve("kernel", m.Live.Kernel)
+	if err != nil {
+		return nil, err
+	}
+	rootfs, err := resolve("rootfs", m.Live.Rootfs)
+	if err != nil {
+		return nil, err
+	}
+	if rootfs.Info.Filesystem != disk.FilesystemSquashfs {
+		return nil, fmt.Errorf("machine %q: live: rootfs %s is not a squashfs image", m.Name, m.Live.Rootfs.Source())
+	}
+	// The kernel cannot mount a squashfs on a disk as a live root by itself.
+	if m.Live.Initrd == nil {
+		return nil, fmt.Errorf("machine %q: live: a squashfs rootfs needs an initrd", m.Name)
+	}
+	initrd, err := resolve("initrd", m.Live.Initrd)
+	if err != nil {
+		return nil, err
+	}
+	return &Boot{Kernel: kernel.Path, Initrd: initrd.Path, Rootfs: rootfs.Path, Cmdline: LiveCmdline(m)}, nil
+}
+
+// LiveCmdline derives the kernel command line of a live machine: the serial
+// console seiro attaches, the root that dracut's dmsquash-live mounts from
+// the rootfs disk, and the NoCloud seed when cloud-init is declared. The
+// declared cmdline comes last so that it can override them.
+func LiveCmdline(m *spec.Machine) string {
+	args := []string{"console=ttyS0", "root=live:/dev/disk/by-id/virtio-" + RootfsSerial}
+	if m.CloudInit != nil {
+		args = append(args, "ds=nocloud")
+	}
+	if m.Live.Cmdline != "" {
+		args = append(args, m.Live.Cmdline)
+	}
+	return strings.Join(args, " ")
 }
 
 // MAC derives a stable, locally administered unicast MAC address.
@@ -374,15 +443,23 @@ func VMMArgs(p *Machine, m *spec.Machine, firmware string) []string {
 		// vhost-user devices need guest memory shared with the backend.
 		memory += ",shared=on"
 	}
-	args := []string{
-		"--api-socket", "path=" + p.APISocket,
-		"--firmware", firmware,
-		"--cpus", "boot=" + strconv.Itoa(m.CPUs),
+	args := []string{"--api-socket", "path=" + p.APISocket}
+	if p.Boot != nil {
+		args = append(args, "--kernel", p.Boot.Kernel)
+		if p.Boot.Initrd != "" {
+			args = append(args, "--initramfs", p.Boot.Initrd)
+		}
+		args = append(args, "--cmdline", p.Boot.Cmdline)
+	} else {
+		args = append(args, "--firmware", firmware)
+	}
+	args = append(args,
+		"--cpus", "boot="+strconv.Itoa(m.CPUs),
 		"--memory", memory,
-		"--serial", "socket=" + p.SerialSocket,
+		"--serial", "socket="+p.SerialSocket,
 		"--console", "off",
 		"--vsock", fmt.Sprintf("cid=%d,socket=%s", GuestCID, p.VSockSocket),
-	}
+	)
 	if creds := GuestCredentials(p.NICs, m.Tweaks); len(creds) > 0 {
 		args = append(args, "--platform", "oem_strings=["+strings.Join(creds, ",")+"]")
 	}
@@ -396,6 +473,9 @@ func VMMArgs(p *Machine, m *spec.Machine, firmware string) []string {
 			opt += ",backing_files=on"
 		}
 		disks = append(disks, opt)
+	}
+	if p.Boot != nil && p.Boot.Rootfs != "" {
+		disks = append(disks, fmt.Sprintf("path=%s,image_type=raw,readonly=on,id=rootfs,serial=%s", p.Boot.Rootfs, RootfsSerial))
 	}
 	if p.Seed != nil {
 		disks = append(disks, fmt.Sprintf("path=%s,image_type=raw,readonly=on,id=seed", p.Seed.Path))

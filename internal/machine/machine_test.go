@@ -167,3 +167,25 @@ func TestDescribePorts(t *testing.T) {
 		t.Error("expected empty description")
 	}
 }
+
+func TestLocalImage(t *testing.T) {
+	t.Parallel()
+
+	p := filepath.Join(t.TempDir(), "vmlinuz")
+	if err := os.WriteFile(p, []byte("kernel"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const sum = "6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c" // sha256 of "kernel"
+
+	for _, img := range []*spec.Image{{Path: p}, {Path: p, SHA256: sum}} {
+		if got, err := localImage(img); err != nil || got != p {
+			t.Errorf("localImage(%+v) = %q, %v", img, got, err)
+		}
+	}
+	if _, err := localImage(&spec.Image{Path: p, SHA256: strings.Repeat("0", 64)}); err == nil || !strings.Contains(err.Error(), "sha256 mismatch") {
+		t.Errorf("expected sha256 mismatch, got %v", err)
+	}
+	if _, err := localImage(&spec.Image{Path: p + ".missing"}); err == nil {
+		t.Error("expected an error for a missing file")
+	}
+}

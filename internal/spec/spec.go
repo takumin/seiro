@@ -14,9 +14,11 @@ type Environment struct {
 	Machines []*Machine `json:"machines"`
 }
 
-// Image is an OS image fetched from a URL.
+// Image is an OS image fetched from a URL, or a local file used in place.
+// Exactly one of URL and Path is set.
 type Image struct {
-	URL    string `json:"url"`
+	URL    string `json:"url,omitempty"`
+	Path   string `json:"path,omitempty"`
 	SHA256 string `json:"sha256,omitempty"`
 }
 
@@ -37,7 +39,24 @@ func DefaultTweaks() Tweaks {
 	return Tweaks{EarlyNICNames: true, SkipNetworkWait: true}
 }
 
-// CacheKey returns the key under which the image is stored in the cache.
+// Source returns the URL or the path of the image, for messages.
+func (i *Image) Source() string {
+	if i.Path != "" {
+		return i.Path
+	}
+	return i.URL
+}
+
+// Key identifies the image among the images of an environment: the path of a
+// local image, otherwise its cache key.
+func (i *Image) Key() string {
+	if i.Path != "" {
+		return "path:" + i.Path
+	}
+	return i.CacheKey()
+}
+
+// CacheKey returns the key under which a downloaded image is stored in the cache.
 // The declared checksum is used when present, otherwise a digest of the URL.
 func (i *Image) CacheKey() string {
 	if i.SHA256 != "" {
@@ -51,6 +70,25 @@ func (i *Image) CacheKey() string {
 type Disk struct {
 	Image *Image `json:"image,omitempty"`
 	Size  uint64 `json:"size"`
+}
+
+// Live boots the kernel and initrd directly, with the root on a read-only
+// image whose changes live in memory and are lost when the machine stops.
+type Live struct {
+	Kernel *Image `json:"kernel"`
+	Initrd *Image `json:"initrd,omitempty"`
+	Rootfs *Image `json:"rootfs"`
+	// Cmdline is appended to the kernel command line seiro derives.
+	Cmdline string `json:"cmdline,omitempty"`
+}
+
+// Images returns the images the live boot uses.
+func (l *Live) Images() []*Image {
+	images := []*Image{l.Kernel}
+	if l.Initrd != nil {
+		images = append(images, l.Initrd)
+	}
+	return append(images, l.Rootfs)
 }
 
 // NIC is a network interface attached to a network.
@@ -77,6 +115,7 @@ type Machine struct {
 	Name      string     `json:"name"`
 	CPUs      int        `json:"cpus"`
 	Memory    uint64     `json:"memory"`
+	Live      *Live      `json:"live,omitempty"`
 	Disks     []Disk     `json:"disks"`
 	NICs      []NIC      `json:"nics"`
 	Ports     []Port     `json:"ports"`
@@ -88,13 +127,21 @@ type Machine struct {
 func (e *Environment) Images() []*Image {
 	seen := map[string]bool{}
 	var images []*Image
+	add := func(img *Image) {
+		if img == nil || seen[img.Key()] {
+			return
+		}
+		seen[img.Key()] = true
+		images = append(images, img)
+	}
 	for _, m := range e.Machines {
-		for _, d := range m.Disks {
-			if d.Image == nil || seen[d.Image.CacheKey()] {
-				continue
+		if m.Live != nil {
+			for _, img := range m.Live.Images() {
+				add(img)
 			}
-			seen[d.Image.CacheKey()] = true
-			images = append(images, d.Image)
+		}
+		for _, d := range m.Disks {
+			add(d.Image)
 		}
 	}
 	return images

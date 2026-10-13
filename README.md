@@ -76,6 +76,38 @@ machine(name = "custom", disks = [...], tweaks = tweaks(early_nic_names = False)
 machine(name = "bare", disks = [...], tweaks = False)  # all off
 ```
 
+## Live boot
+
+A machine can boot a kernel and an initrd directly, with its root on a read-only squashfs image,
+such as the images built by [mitamae-cloud-image](https://github.com/takumin/mitamae-cloud-image).
+Changes to the root are kept in memory and are lost when the machine stops, so `seiro down` and `seiro up` start it afresh.
+
+```python
+build = "../mitamae-cloud-image/releases/debian/trixie/cloud-backports/amd64/server"
+
+machine(
+    name = "live",
+    memory = "2GiB",
+    boot = live(
+        kernel = image(path = build + "/vmlinuz"),
+        initrd = image(path = build + "/initrd.img"),
+        rootfs = image(path = build + "/rootfs.squashfs"),
+        cmdline = "anynet",  # optional, appended to the command line seiro derives
+    ),
+    nics = [nic("eth0", network = internet)],
+    cloud_init = cloud_init(user_data = {...}),
+)
+```
+
+`disks` are optional with `live`; declared disks still appear as `vda`, `vdb`, and so on.
+The initrd must find the root with dracut's dmsquash-live: seiro passes `root=live:` pointing at the rootfs, the serial console and,
+with `cloud_init`, `ds=nocloud`.
+
+`image(path = ...)` uses a local file in place, relative to the Seirofile, instead of downloading it into the cache.
+A rebuilt live image is picked up on the next `seiro up`.
+A disk created from a local image keeps referring to it, so rebuilding that image breaks the disk; run `seiro destroy` first.
+`sha256` is optional and, when given, is checked on every `seiro up`.
+
 ## Requirements
 
 - Linux with KVM (`/dev/kvm` accessible by your user)

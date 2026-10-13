@@ -67,13 +67,26 @@ func (m *Machine) validate() []error {
 		fail("memory must be a multiple of 1MiB")
 	}
 
-	if len(m.Disks) == 0 {
+	checkImage := func(what string, img *Image) {
+		if img != nil && img.SHA256 != "" && !sha256Re.MatchString(img.SHA256) {
+			fail("%s: sha256 must be 64 lowercase hexadecimal characters", what)
+		}
+	}
+	if m.Live != nil {
+		if m.Live.Kernel == nil {
+			fail("live: kernel is required")
+		}
+		if m.Live.Rootfs == nil {
+			fail("live: rootfs is required")
+		}
+		checkImage("live: kernel", m.Live.Kernel)
+		checkImage("live: initrd", m.Live.Initrd)
+		checkImage("live: rootfs", m.Live.Rootfs)
+	} else if len(m.Disks) == 0 {
 		fail("at least one disk is required")
 	}
 	for i, d := range m.Disks {
-		if d.Image != nil && d.Image.SHA256 != "" && !sha256Re.MatchString(d.Image.SHA256) {
-			fail("disk %d: sha256 must be 64 lowercase hexadecimal characters", i)
-		}
+		checkImage(fmt.Sprintf("disk %d", i), d.Image)
 	}
 
 	nicNames := map[string]bool{}

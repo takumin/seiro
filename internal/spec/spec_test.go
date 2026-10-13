@@ -53,6 +53,22 @@ func TestValidate(t *testing.T) {
 			mutate: func(e *spec.Environment) { e.Machines[0].Disks = nil },
 			errs:   []string{"at least one disk"},
 		},
+		"live without disks": {
+			mutate: func(e *spec.Environment) {
+				e.Machines[0].Disks = nil
+				e.Machines[0].Live = &spec.Live{Kernel: &spec.Image{Path: "/k"}, Rootfs: &spec.Image{Path: "/r"}}
+			},
+		},
+		"live missing parts": {
+			mutate: func(e *spec.Environment) { e.Machines[0].Live = &spec.Live{} },
+			errs:   []string{"live: kernel is required", "live: rootfs is required"},
+		},
+		"live bad sha256": {
+			mutate: func(e *spec.Environment) {
+				e.Machines[0].Live = &spec.Live{Kernel: &spec.Image{Path: "/k", SHA256: "ABC"}, Rootfs: &spec.Image{Path: "/r"}}
+			},
+			errs: []string{"live: kernel: sha256 must be"},
+		},
 		"bad sha256": {
 			mutate: func(e *spec.Environment) { e.Machines[0].Disks[0].Image.SHA256 = "ABC" },
 			errs:   []string{"sha256 must be"},
@@ -150,5 +166,26 @@ func TestImages(t *testing.T) {
 	}
 	if e.Machine("y") == nil || e.Machine("z") != nil {
 		t.Error("Machine() lookup mismatch")
+	}
+}
+
+func TestImagesLive(t *testing.T) {
+	t.Parallel()
+
+	kernel := &spec.Image{Path: "/b/vmlinuz"}
+	rootfs := &spec.Image{Path: "/b/rootfs.squashfs"}
+	data := &spec.Image{URL: "https://example.com/a.img", SHA256: testSHA}
+	e := &spec.Environment{Machines: []*spec.Machine{
+		{Name: "x", Live: &spec.Live{Kernel: kernel, Rootfs: rootfs}, Disks: []spec.Disk{{Image: data}}},
+		{Name: "y", Live: &spec.Live{Kernel: &spec.Image{Path: kernel.Path}, Initrd: &spec.Image{Path: "/b/initrd.img"}, Rootfs: rootfs}},
+	}}
+
+	var keys []string
+	for _, img := range e.Images() {
+		keys = append(keys, img.Key())
+	}
+	want := []string{"path:/b/vmlinuz", "path:/b/rootfs.squashfs", testSHA, "path:/b/initrd.img"}
+	if strings.Join(keys, " ") != strings.Join(want, " ") {
+		t.Errorf("image keys = %q, want %q", keys, want)
 	}
 }

@@ -146,6 +146,108 @@ func TestBuildMinimal(t *testing.T) {
 	}
 }
 
+var (
+	kernel = &spec.Image{Path: "/b/vmlinuz"}
+	initrd = &spec.Image{Path: "/b/initrd.img"}
+	rootfs = &spec.Image{Path: "/b/rootfs.squashfs"}
+)
+
+func liveFixture(t *testing.T) (*env.Env, plan.Resources) {
+	t.Helper()
+	e, res := fixture(t)
+	res.Firmware = ""
+	res.Images[kernel.Key()] = plan.Image{Path: kernel.Path, Info: disk.Info{Format: disk.FormatRaw, VirtualSize: 13 * size.MiB}}
+	res.Images[initrd.Key()] = plan.Image{Path: initrd.Path, Info: disk.Info{Format: disk.FormatRaw, VirtualSize: 36 * size.MiB}}
+	res.Images[rootfs.Key()] = plan.Image{Path: rootfs.Path, Info: disk.Info{Format: disk.FormatRaw, VirtualSize: 292 * size.MiB, Filesystem: disk.FilesystemSquashfs}}
+	return e, res
+}
+
+func liveMachine() *spec.Machine {
+	m := machine()
+	m.Live = &spec.Live{Kernel: kernel, Initrd: initrd, Rootfs: rootfs, Cmdline: "anynet"}
+	m.Disks = []spec.Disk{{Size: 10 * size.GiB}}
+	m.Ports = nil
+	return m
+}
+
+func TestBuildLive(t *testing.T) {
+	t.Parallel()
+
+	e, res := liveFixture(t)
+	p, err := plan.Build(e, liveMachine(), res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mp := e.Machine("dev")
+
+	wantCmdline := "console=ttyS0 root=live:/dev/disk/by-id/virtio-seiro-rootfs ds=nocloud anynet"
+	wantBoot := plan.Boot{Kernel: kernel.Path, Initrd: initrd.Path, Cmdline: wantCmdline, Rootfs: rootfs.Path}
+	if p.Boot == nil || *p.Boot != wantBoot {
+		t.Errorf("boot = %+v, want %+v", p.Boot, wantBoot)
+	}
+	// The rootfs is not one of the declared disks: it is neither created nor compared.
+	if len(p.Disks) != 1 || p.Disks[0].Path != mp.Disk(0, "raw") {
+		t.Errorf("disks = %+v", p.Disks)
+	}
+
+	wantVMM := []string{
+		"--api-socket", "path=" + mp.APISocket(),
+		"--kernel", kernel.Path,
+		"--initramfs", initrd.Path,
+		"--cmdline", wantCmdline,
+		"--cpus", "boot=2",
+		"--memory", "size=2048M,shared=on",
+		"--serial", "socket=" + mp.SerialSocket(),
+		"--console", "off",
+		"--vsock", "cid=3,socket=" + mp.VSockSocket(),
+		"--platform", "oem_strings=[" + strings.Join(plan.GuestCredentials(p.NICs, spec.DefaultTweaks()), ",") + "]",
+		"--disk",
+		"path=" + mp.Disk(0, "raw") + ",image_type=raw,id=disk0",
+		"path=" + rootfs.Path + ",image_type=raw,readonly=on,id=rootfs,serial=seiro-rootfs",
+		"path=" + mp.Seed() + ",image_type=raw,readonly=on,id=seed",
+		"--net",
+		"vhost_user=true,socket=" + mp.PasstSocket("eth0") + ",mac=" + p.NICs[0].MAC + ",id=nic-eth0",
+	}
+	if !slices.Equal(p.VMM.Args, wantVMM) {
+		t.Errorf("vmm args:\n%q\nwant:\n%q", p.VMM.Args, wantVMM)
+	}
+}
+
+func TestLiveCmdline(t *testing.T) {
+	t.Parallel()
+
+	m := liveMachine()
+	m.CloudInit = nil
+	m.Live.Cmdline = ""
+	if got, want := plan.LiveCmdline(m), "console=ttyS0 root=live:/dev/disk/by-id/virtio-seiro-rootfs"; got != want {
+		t.Errorf("cmdline = %q, want %q", got, want)
+	}
+}
+
+func TestBuildLiveErrors(t *testing.T) {
+	t.Parallel()
+
+	e, res := liveFixture(t)
+
+	notSquashfs := liveMachine()
+	notSquashfs.Live.Rootfs = kernel
+	if _, err := plan.Build(e, notSquashfs, res); err == nil || !strings.Contains(err.Error(), "is not a squashfs image") {
+		t.Errorf("expected squashfs error, got %v", err)
+	}
+
+	noInitrd := liveMachine()
+	noInitrd.Live.Initrd = nil
+	if _, err := plan.Build(e, noInitrd, res); err == nil || !strings.Contains(err.Error(), "needs an initrd") {
+		t.Errorf("expected initrd error, got %v", err)
+	}
+
+	missing := liveMachine()
+	missing.Live.Kernel = &spec.Image{Path: "/b/other"}
+	if _, err := plan.Build(e, missing, res); err == nil || !strings.Contains(err.Error(), "live: kernel /b/other is not available") {
+		t.Errorf("expected missing kernel error, got %v", err)
+	}
+}
+
 func TestBuildErrors(t *testing.T) {
 	t.Parallel()
 

@@ -2,8 +2,11 @@ package machine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"reflect"
@@ -74,7 +77,12 @@ func (m *Manager) resources(ctx context.Context, machines []*spec.Machine) (plan
 
 	sub := &spec.Environment{Machines: machines}
 	for _, img := range sub.Images() {
-		p, err := m.Cache.Fetch(ctx, "images", img.CacheKey(), img.URL, img.SHA256)
+		var p string
+		if img.Path != "" {
+			p, err = localImage(img)
+		} else {
+			p, err = m.Cache.Fetch(ctx, "images", img.CacheKey(), img.URL, img.SHA256)
+		}
 		if err != nil {
 			return res, err
 		}
@@ -82,12 +90,38 @@ func (m *Manager) resources(ctx context.Context, machines []*spec.Machine) (plan
 		if err != nil {
 			return res, err
 		}
-		res.Images[img.CacheKey()] = plan.Image{Path: p, Info: *info}
+		res.Images[img.Key()] = plan.Image{Path: p, Info: *info}
 	}
-	if res.Firmware, err = m.Cache.Firmware(ctx); err != nil {
-		return res, err
+	for _, mc := range machines {
+		if mc.Live == nil {
+			if res.Firmware, err = m.Cache.Firmware(ctx); err != nil {
+				return res, err
+			}
+			break
+		}
 	}
 	return res, nil
+}
+
+// localImage checks a local image, which is used in place rather than copied
+// into the cache, against its declared checksum.
+func localImage(img *spec.Image) (string, error) {
+	f, err := os.Open(img.Path) // #nosec G304 -- local images are named in the Seirofile
+	if err != nil {
+		return "", err
+	}
+	defer f.Close() //nolint:errcheck // read-only
+	if img.SHA256 == "" {
+		return img.Path, nil
+	}
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", fmt.Errorf("%s: %w", img.Path, err)
+	}
+	if got := hex.EncodeToString(h.Sum(nil)); got != img.SHA256 {
+		return "", fmt.Errorf("%s: sha256 mismatch: got %s, want %s", img.Path, got, img.SHA256)
+	}
+	return img.Path, nil
 }
 
 func checkKVM() error {

@@ -28,6 +28,7 @@ func (b *builder) predeclared() starlark.StringDict {
 	return starlark.StringDict{
 		"image":      starlark.NewBuiltin("image", b.image),
 		"disk":       starlark.NewBuiltin("disk", b.disk),
+		"live":       starlark.NewBuiltin("live", b.live),
 		"machine":    starlark.NewBuiltin("machine", b.machine),
 		"nic":        starlark.NewBuiltin("nic", b.nic),
 		"port":       starlark.NewBuiltin("port", b.port),
@@ -46,14 +47,52 @@ func unsupported(msg string) func(*starlark.Thread, *starlark.Builtin, starlark.
 }
 
 func (b *builder) image(_ *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var url, sum string
-	if err := starlark.UnpackArgs(fn.Name(), args, kwargs, "url", &url, "sha256?", &sum); err != nil {
+	var url, path, sum string
+	if err := starlark.UnpackArgs(fn.Name(), args, kwargs, "url?", &url, "path?", &path, "sha256?", &sum); err != nil {
 		return nil, err
 	}
-	if !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "http://") {
-		return nil, fmt.Errorf("%s: url must start with https:// or http://", fn.Name())
+	img := &spec.Image{SHA256: strings.ToLower(sum)}
+	switch {
+	case url != "" && path != "":
+		return nil, fmt.Errorf("%s: url and path cannot both be set", fn.Name())
+	case url != "":
+		if !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "http://") {
+			return nil, fmt.Errorf("%s: url must start with https:// or http://", fn.Name())
+		}
+		img.URL = url
+	case path != "":
+		resolved, err := b.resolve(path)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", fn.Name(), err)
+		}
+		img.Path = filepath.Clean(resolved)
+	default:
+		return nil, fmt.Errorf("%s: url or path is required", fn.Name())
 	}
-	return &imageValue{img: &spec.Image{URL: url, SHA256: strings.ToLower(sum)}}, nil
+	return &imageValue{img: img}, nil
+}
+
+func (b *builder) live(_ *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var kernel, rootfs *imageValue
+	var initrd starlark.Value = starlark.None
+	var cmdline string
+	if err := starlark.UnpackArgs(fn.Name(), args, kwargs,
+		"kernel", &kernel,
+		"rootfs", &rootfs,
+		"initrd?", &initrd,
+		"cmdline?", &cmdline,
+	); err != nil {
+		return nil, err
+	}
+	l := &spec.Live{Kernel: kernel.img, Rootfs: rootfs.img, Cmdline: cmdline}
+	switch v := initrd.(type) {
+	case starlark.NoneType:
+	case *imageValue:
+		l.Initrd = v.img
+	default:
+		return nil, fmt.Errorf("%s: initrd must be an image(), got %s", fn.Name(), initrd.Type())
+	}
+	return liveValue{live: l}, nil
 }
 
 func (b *builder) tweaks(_ *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
@@ -91,9 +130,10 @@ func (b *builder) disk(_ *starlark.Thread, fn *starlark.Builtin, args starlark.T
 func (b *builder) machine(_ *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var (
 		name      string
-		disks     starlark.Iterable
 		cpus                        = DefaultCPUs
 		memory                      = DefaultMemory
+		boot      starlark.Value    = starlark.None
+		disks     starlark.Iterable = starlark.NewList(nil)
 		nics      starlark.Iterable = starlark.NewList(nil)
 		ports     starlark.Iterable = starlark.NewList(nil)
 		cloudInit starlark.Value    = starlark.None
@@ -101,9 +141,10 @@ func (b *builder) machine(_ *starlark.Thread, fn *starlark.Builtin, args starlar
 	)
 	if err := starlark.UnpackArgs(fn.Name(), args, kwargs,
 		"name", &name,
-		"disks", &disks,
+		"disks?", &disks,
 		"cpus?", &cpus,
 		"memory?", &memory,
+		"boot?", &boot,
 		"nics?", &nics,
 		"ports?", &ports,
 		"cloud_init?", &cloudInit,
@@ -120,6 +161,14 @@ func (b *builder) machine(_ *starlark.Thread, fn *starlark.Builtin, args starlar
 		return nil, errorf("memory: %w", err)
 	}
 	m := &spec.Machine{Name: name, CPUs: cpus, Memory: mem, Disks: []spec.Disk{}, NICs: []spec.NIC{}, Ports: []spec.Port{}}
+
+	switch v := boot.(type) {
+	case starlark.NoneType:
+	case liveValue:
+		m.Live = v.live
+	default:
+		return nil, errorf("boot must be a live(), got %s", boot.Type())
+	}
 
 	if err := each(disks, func(v starlark.Value) error {
 		d, ok := v.(diskValue)

@@ -14,11 +14,26 @@ import (
 
 type imageValue struct{ img *spec.Image }
 
-func (v *imageValue) String() string        { return fmt.Sprintf("image(url = %q)", v.img.URL) }
+func (v *imageValue) String() string {
+	if v.img.Path != "" {
+		return fmt.Sprintf("image(path = %q)", v.img.Path)
+	}
+	return fmt.Sprintf("image(url = %q)", v.img.URL)
+}
 func (v *imageValue) Type() string          { return "image" }
 func (v *imageValue) Freeze()               {}
 func (v *imageValue) Truth() starlark.Bool  { return starlark.True }
-func (v *imageValue) Hash() (uint32, error) { return starlark.String(v.img.URL).Hash() }
+func (v *imageValue) Hash() (uint32, error) { return starlark.String(v.img.Key()).Hash() }
+
+type liveValue struct{ live *spec.Live }
+
+func (v liveValue) String() string {
+	return fmt.Sprintf("live(kernel = %q, ...)", v.live.Kernel.Source())
+}
+func (v liveValue) Type() string          { return "live" }
+func (v liveValue) Freeze()               {}
+func (v liveValue) Truth() starlark.Bool  { return starlark.True }
+func (v liveValue) Hash() (uint32, error) { return 0, fmt.Errorf("unhashable type: live") }
 
 type diskValue struct{ disk spec.Disk }
 
@@ -26,7 +41,7 @@ func (v diskValue) String() string {
 	if v.disk.Image == nil {
 		return fmt.Sprintf("disk(size = %q)", size.Format(v.disk.Size))
 	}
-	return fmt.Sprintf("disk(image = %q, size = %q)", v.disk.Image.URL, size.Format(v.disk.Size))
+	return fmt.Sprintf("disk(image = %q, size = %q)", v.disk.Image.Source(), size.Format(v.disk.Size))
 }
 func (v diskValue) Type() string          { return "disk" }
 func (v diskValue) Freeze()               {}

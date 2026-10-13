@@ -18,12 +18,20 @@ const (
 	FormatQCOW2 = "qcow2"
 )
 
-var qcow2Magic = []byte{'Q', 'F', 'I', 0xfb}
+// Filesystems detected in raw images.
+const FilesystemSquashfs = "squashfs"
+
+var (
+	qcow2Magic    = []byte{'Q', 'F', 'I', 0xfb}
+	squashfsMagic = []byte{'h', 's', 'q', 's'}
+)
 
 // Info describes an existing image file.
 type Info struct {
 	Format      string `json:"format"`
 	VirtualSize uint64 `json:"virtual_size"`
+	// Filesystem is set when a raw image is a filesystem seiro recognizes.
+	Filesystem string `json:"filesystem,omitempty"`
 }
 
 // Inspect detects the format and virtual size of an image file.
@@ -47,7 +55,11 @@ func Inspect(path string) (*Info, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Info{Format: FormatRaw, VirtualSize: uint64(fi.Size())}, nil // #nosec G115 -- file sizes are non-negative
+	info := &Info{Format: FormatRaw, VirtualSize: uint64(fi.Size())} // #nosec G115 -- file sizes are non-negative
+	if n >= 4 && bytes.Equal(header[:4], squashfsMagic) {
+		info.Filesystem = FilesystemSquashfs
+	}
+	return info, nil
 }
 
 // CreateOverlay creates a qcow2 image of the given virtual size that uses

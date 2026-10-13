@@ -90,3 +90,19 @@ func TestInspectSmallFile(t *testing.T) {
 		t.Errorf("Inspect = %+v", info)
 	}
 }
+
+func TestInspectSquashfs(t *testing.T) {
+	t.Parallel()
+
+	p := filepath.Join(t.TempDir(), "rootfs.squashfs")
+	if err := os.WriteFile(p, append([]byte("hsqs"), make([]byte, 60)...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := disk.Inspect(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *info != (disk.Info{Format: disk.FormatRaw, VirtualSize: 64, Filesystem: disk.FilesystemSquashfs}) {
+		t.Errorf("Inspect = %+v", info)
+	}
+}

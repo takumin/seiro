@@ -1,0 +1,27 @@
+# vim: ft=starlark :
+
+# A live image built by mitamae-cloud-image: a kernel, a dracut initrd and a squashfs root.
+# Relative paths are resolved from this Seirofile.
+build = "../../../mitamae-cloud-image/releases/debian/trixie/cloud-backports/amd64/server"
+
+machine(
+    name = "live",
+    cpus = 2,
+    memory = "2GiB",
+    boot = live(
+        kernel = image(path = build + "/vmlinuz"),
+        initrd = image(path = build + "/initrd.img"),
+        rootfs = image(path = build + "/rootfs.squashfs"),
+    ),
+    nics = [
+        nic("eth0", network = internet),
+    ],
+    cloud_init = cloud_init(user_data = {
+        "users": [{
+            "name": "ops",
+            "sudo": "ALL=(ALL) NOPASSWD:ALL",
+            "shell": "/bin/bash",
+            "ssh_authorized_keys": [file("~/.ssh/authorized_keys")],
+        }],
+    }),
+)
