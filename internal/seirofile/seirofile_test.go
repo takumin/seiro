@@ -276,8 +276,8 @@ func TestExamples(t *testing.T) {
 	if err != nil {
 		t.Skip(err)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".ssh", "id_ed25519.pub")); err != nil {
-		t.Skip("examples read ~/.ssh/id_ed25519.pub")
+	if _, err := os.Stat(filepath.Join(home, ".ssh", "authorized_keys")); err != nil {
+		t.Skip("examples read ~/.ssh/authorized_keys")
 	}
 	paths, err := filepath.Glob("../../examples/*/Seirofile")
 	if err != nil || len(paths) == 0 {

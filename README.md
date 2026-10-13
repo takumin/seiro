@@ -26,7 +26,7 @@ machine(
     nics = [nic("eth0", network = internet)],
     ports = [port(host = 2222, guest = 22)],
     cloud_init = cloud_init(user_data = {
-        "users": [{"name": "dev", "ssh_authorized_keys": [file("~/.ssh/id_ed25519.pub")]}],
+        "users": [{"name": "dev", "ssh_authorized_keys": [file("~/.ssh/authorized_keys")]}],
     }),
 )
 ```
