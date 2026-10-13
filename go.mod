@@ -6,7 +6,7 @@ require (
 	github.com/diskfs/go-diskfs v1.9.4
 	github.com/dypflying/go-qcow2lib v1.0.0
 	github.com/urfave/cli/v3 v3.14.0
-	go.starlark.net v0.0.0-20261005163335-bcb1a1a55bf9
+	go.starlark.net v0.0.0-20261012215802-edf86ebe07b2
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/crypto v0.58.0
 	golang.org/x/term v0.47.0
