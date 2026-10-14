@@ -1,6 +1,7 @@
 // Package supervise implements the per-machine supervisor process. It runs the
-// passt backends and cloud-hypervisor as children, relays the serial console to
-// a log file and to console clients, and cleans up when the VM exits.
+// backends (passt and the vsock device) and the VMM as children, relays the
+// serial console to a log file and to console clients, and cleans up when the
+// VM exits.
 package supervise
 
 import (
@@ -17,6 +18,10 @@ const (
 	StateRunning  = "running"
 	StateStopped  = "stopped"
 )
+
+// VSockBackend is the key of the vsock device in Status.BackendPIDs, which
+// are otherwise keyed by NIC name. It is longer than any NIC name.
+const VSockBackend = "vhost-device-vsock"
 
 // Status is the content of state.json. Only the supervisor writes it.
 type Status struct {

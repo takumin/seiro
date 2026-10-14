@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -62,7 +63,7 @@ func (s *supervisor) run(ctx context.Context) (err error) {
 	defer func() {
 		s.stopBackends()
 		// The runtime directory only holds sockets and the lock files that
-		// cloud-hypervisor and passt create next to them.
+		// the VMM and the backends create next to them.
 		os.RemoveAll(s.plan.RuntimeDir) //nolint:errcheck,gosec // best effort
 		now := time.Now().UTC()
 		s.status.State = StateStopped
@@ -97,9 +98,22 @@ func (s *supervisor) run(ctx context.Context) (err error) {
 		}
 	}
 
+	if d := s.plan.VSockDevice; d != nil {
+		c, err := start(d.Backend)
+		if err != nil {
+			return fmt.Errorf("start vsock device: %w", err)
+		}
+		s.backends = append(s.backends, c)
+		s.status.BackendPIDs[VSockBackend] = c.cmd.Process.Pid
+		if err := waitSocket(d.Socket, c); err != nil {
+			return fmt.Errorf("vsock device: %w (see %s)", err, d.Backend.Log)
+		}
+	}
+
+	name := filepath.Base(s.plan.VMM.Path)
 	vmm, err := start(s.plan.VMM)
 	if err != nil {
-		return fmt.Errorf("start cloud-hypervisor: %w", err)
+		return fmt.Errorf("start %s: %w", name, err)
 	}
 	s.status.VMMPID = vmm.cmd.Process.Pid
 	abort := func(err error) error {
@@ -109,7 +123,7 @@ func (s *supervisor) run(ctx context.Context) (err error) {
 	}
 
 	if err := waitSocket(s.plan.SerialSocket, vmm); err != nil {
-		return abort(fmt.Errorf("cloud-hypervisor: %w (see %s)", err, s.plan.VMM.Log))
+		return abort(fmt.Errorf("%s: %w (see %s)", name, err, s.plan.VMM.Log))
 	}
 	serial, err := net.Dial("unix", s.plan.SerialSocket)
 	if err != nil {
@@ -154,14 +168,14 @@ loop:
 		case <-vmm.done:
 			break loop
 		case sig := <-sigs:
-			slog.Info("stopping cloud-hypervisor", slog.String("signal", sig.String()))
+			slog.Info("stopping "+name, slog.String("signal", sig.String()))
 			vmm.cmd.Process.Signal(syscall.SIGTERM) //nolint:errcheck,gosec // best effort
 		case <-ctx.Done():
 			vmm.cmd.Process.Signal(syscall.SIGTERM) //nolint:errcheck,gosec // best effort
 		}
 	}
 	s.recordExit(vmm.err)
-	slog.Info("cloud-hypervisor exited", slog.Any("exit_code", s.status.ExitCode), slog.String("signal", s.status.ExitSignal))
+	slog.Info(name+" exited", slog.Any("exit_code", s.status.ExitCode), slog.String("signal", s.status.ExitSignal))
 
 	// Let the relay drain what is left into the log.
 	serial.Close() //nolint:errcheck,gosec // unblock the relay if the socket is still open

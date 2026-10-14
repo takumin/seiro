@@ -10,16 +10,17 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/takumin/seiro/internal/chapi"
 	"github.com/takumin/seiro/internal/cloudinit"
 	"github.com/takumin/seiro/internal/disk"
 	"github.com/takumin/seiro/internal/env"
 	"github.com/takumin/seiro/internal/hostkey"
 	"github.com/takumin/seiro/internal/plan"
+	"github.com/takumin/seiro/internal/qemu"
 	"github.com/takumin/seiro/internal/spec"
 	"github.com/takumin/seiro/internal/supervise"
 )
@@ -60,15 +61,38 @@ func (m *Manager) Up(ctx context.Context, names []string) error {
 func (m *Manager) resources(ctx context.Context, machines []*spec.Machine) (plan.Resources, error) {
 	res := plan.Resources{Images: map[string]plan.Image{}}
 	var err error
-	if res.CloudHypervisor, err = lookPath("cloud-hypervisor"); err != nil {
-		return res, err
-	}
 	for _, mc := range machines {
-		if len(mc.NICs) > 0 {
+		switch mc.VMMName() {
+		case spec.VMMQEMU:
+			if res.QEMU == "" {
+				if res.QEMU, err = qemuPath(); err != nil {
+					return res, err
+				}
+				if res.VSockDevice, err = lookPath("vhost-device-vsock"); err != nil {
+					return res, err
+				}
+			}
+			if mc.Live == nil && res.QEMUFirmware == nil {
+				if res.QEMUFirmware, err = qemu.FindFirmware(qemu.FirmwareDirs(), "x86_64", "pc-q35"); err != nil {
+					return res, err
+				}
+			}
+		default:
+			if res.CloudHypervisor == "" {
+				if res.CloudHypervisor, err = lookPath("cloud-hypervisor"); err != nil {
+					return res, err
+				}
+			}
+			if mc.Live == nil && res.Firmware == "" {
+				if res.Firmware, err = m.Cache.Firmware(ctx); err != nil {
+					return res, err
+				}
+			}
+		}
+		if len(mc.NICs) > 0 && res.Passt == "" {
 			if res.Passt, err = lookPath("passt"); err != nil {
 				return res, err
 			}
-			break
 		}
 	}
 	if err := checkKVM(); err != nil {
@@ -92,15 +116,20 @@ func (m *Manager) resources(ctx context.Context, machines []*spec.Machine) (plan
 		}
 		res.Images[img.Key()] = plan.Image{Path: p, Info: *info}
 	}
-	for _, mc := range machines {
-		if mc.Live == nil {
-			if res.Firmware, err = m.Cache.Firmware(ctx); err != nil {
-				return res, err
-			}
-			break
-		}
-	}
 	return res, nil
+}
+
+// qemuPath finds the QEMU system emulator for the host architecture, which
+// seiro runs with KVM. Only x86_64 hosts are supported for now.
+func qemuPath() (string, error) {
+	if runtime.GOARCH != "amd64" {
+		return "", fmt.Errorf("vmm %q is not supported on %s yet", spec.VMMQEMU, runtime.GOARCH)
+	}
+	p, err := exec.LookPath("qemu-system-x86_64")
+	if err != nil {
+		return "", errors.New("qemu-system-x86_64 not found in PATH (install QEMU, e.g. the qemu-system-x86 package)")
+	}
+	return p, nil
 }
 
 // localImage checks a local image, which is used in place rather than copied
@@ -168,7 +197,7 @@ func (m *Manager) up(ctx context.Context, mc *spec.Machine, res plan.Resources) 
 				fmt.Fprintf(m.Out, "%s: cloud_init changed; it only applies to newly created machines\n", mc.Name) //nolint:errcheck // progress output
 				p.Seed = prev.Seed
 				p.SSH = prev.SSH
-				p.VMM.Args = plan.VMMArgs(p, mc, res.Firmware)
+				p.VMM.Args = plan.VMMArgs(p, mc, res)
 			}
 		}
 	}
@@ -195,14 +224,14 @@ func (m *Manager) up(ctx context.Context, mc *spec.Machine, res plan.Resources) 
 	if err := m.spawnSupervisor(paths); err != nil {
 		return err
 	}
-	if err := m.waitRunning(ctx, paths); err != nil {
+	if err := m.waitRunning(ctx, paths, p); err != nil {
 		return err
 	}
 	fmt.Fprintf(m.Out, "%s: running%s\n", mc.Name, describePorts(mc.Ports)) //nolint:errcheck // progress output
 	return nil
 }
 
-// createDisks creates the disks and seed that do not exist yet.
+// createDisks creates the disks, seed and UEFI variable store that do not exist yet.
 func createDisks(p *plan.Machine) error {
 	for _, d := range p.Disks {
 		if _, err := os.Stat(d.Path); err == nil {
@@ -218,6 +247,13 @@ func createDisks(p *plan.Machine) error {
 			return err
 		}
 	}
+	if p.UEFI != nil {
+		if _, err := os.Stat(p.UEFI.Vars); errors.Is(err, os.ErrNotExist) {
+			if err := copyFile(p.UEFI.Vars, p.UEFI.VarsTemplate); err != nil {
+				return err
+			}
+		}
+	}
 	if p.Seed != nil {
 		if _, err := os.Stat(p.Seed.Path); errors.Is(err, os.ErrNotExist) {
 			if err := cloudinit.Build(p.Seed.Path, &p.Seed.Data); err != nil {
@@ -226,6 +262,25 @@ func createDisks(p *plan.Machine) error {
 		}
 	}
 	return nil
+}
+
+// copyFile copies src to a new file dst, which only the user can access.
+func copyFile(dst, src string) error {
+	in, err := os.Open(src) // #nosec G304 -- the firmware named by a QEMU firmware descriptor
+	if err != nil {
+		return err
+	}
+	defer in.Close() //nolint:errcheck // read-only
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G304 -- path inside the machine state directory
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()    //nolint:errcheck,gosec // already failing
+		os.Remove(dst) //nolint:errcheck,gosec // best effort
+		return err
+	}
+	return out.Close()
 }
 
 func (m *Manager) spawnSupervisor(paths *env.MachinePaths) error {
@@ -244,7 +299,7 @@ func (m *Manager) spawnSupervisor(paths *env.MachinePaths) error {
 	return cmd.Process.Release()
 }
 
-func (m *Manager) waitRunning(ctx context.Context, paths *env.MachinePaths) error {
+func (m *Manager) waitRunning(ctx context.Context, paths *env.MachinePaths, p *plan.Machine) error {
 	deadline := time.Now().Add(m.StartTimeout)
 	for time.Now().Before(deadline) {
 		rt, err := supervise.ReadStatus(paths.Status())
@@ -255,8 +310,7 @@ func (m *Manager) waitRunning(ctx context.Context, paths *env.MachinePaths) erro
 			return fmt.Errorf("failed to start: %s (see %s)", rt.Error, paths.SuperviseLog())
 		}
 		if rt != nil && rt.State == supervise.StateRunning {
-			info, err := chapi.New(paths.APISocket()).Info(ctx)
-			if err == nil && info.State == "Running" {
+			if ok, err := controlOf(p).Running(ctx); err == nil && ok {
 				return nil
 			}
 		}

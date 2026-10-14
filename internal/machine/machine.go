@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/takumin/seiro/internal/cache"
-	"github.com/takumin/seiro/internal/chapi"
 	"github.com/takumin/seiro/internal/env"
 	"github.com/takumin/seiro/internal/plan"
 	"github.com/takumin/seiro/internal/seirofile"
@@ -214,7 +213,7 @@ func (m *Manager) down(ctx context.Context, name string, force bool, timeout tim
 		return nil
 	}
 	pid := st.Runtime.SupervisorPID
-	api := chapi.New(m.Env.Machine(name).APISocket())
+	api := controlAt(m.Env.Machine(name))
 
 	if !force {
 		fmt.Fprintf(m.Out, "%s: powering off\n", name) //nolint:errcheck // progress output
@@ -229,7 +228,7 @@ func (m *Manager) down(ctx context.Context, name string, force bool, timeout tim
 		fmt.Fprintf(m.Out, "%s: stopped\n", name) //nolint:errcheck // progress output
 		return nil
 	}
-	// Last resort: the supervisor forwards SIGTERM to cloud-hypervisor and cleans up.
+	// Last resort: the supervisor forwards SIGTERM to the VMM and cleans up.
 	syscall.Kill(pid, syscall.SIGTERM) //nolint:errcheck,gosec // may have exited
 	if waitExit(ctx, pid, 10*time.Second) {
 		fmt.Fprintf(m.Out, "%s: stopped\n", name) //nolint:errcheck // progress output

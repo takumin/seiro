@@ -1,0 +1,28 @@
+# vim: ft=starlark :
+
+ubuntu = image(
+    url = "https://cloud-images.ubuntu.com/releases/26.04/release-20260927/ubuntu-26.04-server-cloudimg-amd64.img",
+    sha256 = "8800651811af9a85465ad1d552add729947bb16488dddb4a9b5305a3d97332b2",
+)
+
+# The same machine as 01-minimal, run on QEMU instead of cloud-hypervisor.
+machine(
+    name = "dev",
+    vmm = "qemu",
+    cpus = 2,
+    memory = "2GiB",
+    disks = [
+        disk(image = ubuntu, size = "20GiB"),
+    ],
+    nics = [
+        nic("eth0", network = internet),
+    ],
+    cloud_init = cloud_init(user_data = {
+        "users": [{
+            "name": "dev",
+            "sudo": "ALL=(ALL) NOPASSWD:ALL",
+            "shell": "/bin/bash",
+            "ssh_authorized_keys": [file("~/.ssh/authorized_keys")],
+        }],
+    }),
+)

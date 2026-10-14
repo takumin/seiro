@@ -19,7 +19,7 @@ func NewCommand(cfg *config.Config) *cli.Command {
 		ShellComplete: complete.Machines(cfg, 1),
 		Flags: []cli.Flag{
 			&cli.BoolFlag{Name: "follow", Aliases: []string{"f"}, Usage: "keep printing appended output"},
-			&cli.BoolFlag{Name: "vmm", Usage: "show the cloud-hypervisor log"},
+			&cli.BoolFlag{Name: "vmm", Usage: "show the VMM log"},
 			&cli.StringFlag{Name: "passt", Usage: "show the passt log of the given NIC"},
 			&cli.BoolFlag{Name: "supervise", Usage: "show the supervisor log"},
 		},

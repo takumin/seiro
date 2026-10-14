@@ -130,6 +130,7 @@ func (b *builder) disk(_ *starlark.Thread, fn *starlark.Builtin, args starlark.T
 func (b *builder) machine(_ *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var (
 		name      string
+		vmm                         = spec.VMMCloudHypervisor
 		cpus                        = DefaultCPUs
 		memory                      = DefaultMemory
 		boot      starlark.Value    = starlark.None
@@ -142,6 +143,7 @@ func (b *builder) machine(_ *starlark.Thread, fn *starlark.Builtin, args starlar
 	if err := starlark.UnpackArgs(fn.Name(), args, kwargs,
 		"name", &name,
 		"disks?", &disks,
+		"vmm?", &vmm,
 		"cpus?", &cpus,
 		"memory?", &memory,
 		"boot?", &boot,
@@ -160,7 +162,7 @@ func (b *builder) machine(_ *starlark.Thread, fn *starlark.Builtin, args starlar
 	if err != nil {
 		return nil, errorf("memory: %w", err)
 	}
-	m := &spec.Machine{Name: name, CPUs: cpus, Memory: mem, Disks: []spec.Disk{}, NICs: []spec.NIC{}, Ports: []spec.Port{}}
+	m := &spec.Machine{Name: name, VMM: vmm, CPUs: cpus, Memory: mem, Disks: []spec.Disk{}, NICs: []spec.NIC{}, Ports: []spec.Port{}}
 
 	switch v := boot.(type) {
 	case starlark.NoneType:

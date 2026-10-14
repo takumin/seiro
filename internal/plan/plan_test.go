@@ -16,6 +16,7 @@ import (
 	"github.com/takumin/seiro/internal/env"
 	"github.com/takumin/seiro/internal/hostkey"
 	"github.com/takumin/seiro/internal/plan"
+	"github.com/takumin/seiro/internal/qemu"
 	"github.com/takumin/seiro/internal/size"
 	"github.com/takumin/seiro/internal/spec"
 )
@@ -30,8 +31,11 @@ func fixture(t *testing.T) (*env.Env, plan.Resources) {
 	}
 	return e, plan.Resources{
 		CloudHypervisor: "/bin/cloud-hypervisor",
+		QEMU:            "/bin/qemu-system-x86_64",
+		VSockDevice:     "/bin/vhost-device-vsock",
 		Passt:           "/bin/passt",
 		Firmware:        "/c/firmware/CLOUDHV.fd",
+		QEMUFirmware:    &qemu.Firmware{Code: "/f/OVMF_CODE.fd", VarsTemplate: "/f/OVMF_VARS.fd"},
 		Images:          map[string]plan.Image{img.CacheKey(): {Path: "/c/images/a/data", Info: disk.Info{Format: disk.FormatQCOW2, VirtualSize: 3 * size.GiB}}},
 		HostKey:         hostKey,
 	}
@@ -102,6 +106,10 @@ func TestBuild(t *testing.T) {
 		t.Errorf("vmm args:\n%q\nwant:\n%q", p.VMM.Args, wantVMM)
 	}
 
+	if p.UEFI != nil || p.VSockDevice != nil {
+		t.Errorf("uefi = %+v, vsock device = %+v", p.UEFI, p.VSockDevice)
+	}
+
 	if p.Seed == nil || p.Seed.Path != mp.Seed() {
 		t.Fatalf("seed = %+v", p.Seed)
 	}
@@ -122,6 +130,100 @@ func TestBuild(t *testing.T) {
 	wantNet := "version: 2\nethernets:\n  eth0:\n    match:\n      macaddress: " + nic.MAC + "\n    set-name: eth0\n    dhcp4: true\n    dhcp6: true\n"
 	if p.Seed.Data.NetworkConfig != wantNet {
 		t.Errorf("network-config:\n%s\nwant:\n%s", p.Seed.Data.NetworkConfig, wantNet)
+	}
+}
+
+func TestBuildQEMU(t *testing.T) {
+	t.Parallel()
+
+	e, res := fixture(t)
+	m := machine()
+	m.VMM = spec.VMMQEMU
+	p, err := plan.Build(e, m, res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mp := e.Machine("dev")
+
+	wantUEFI := plan.UEFI{Code: "/f/OVMF_CODE.fd", Vars: mp.NVRAM(), VarsTemplate: "/f/OVMF_VARS.fd"}
+	if p.UEFI == nil || *p.UEFI != wantUEFI {
+		t.Errorf("uefi = %+v, want %+v", p.UEFI, wantUEFI)
+	}
+	wantDevice := plan.VSockDevice{Socket: mp.VSockDeviceSocket(), Backend: plan.Process{
+		Path: "/bin/vhost-device-vsock",
+		Args: []string{"--guest-cid", "3", "--socket", mp.VSockDeviceSocket(), "--uds-path", mp.VSockSocket()},
+		Log:  mp.VSockDeviceLog(),
+	}}
+	if d := p.VSockDevice; d == nil || d.Socket != wantDevice.Socket || d.Backend.Path != wantDevice.Backend.Path ||
+		!slices.Equal(d.Backend.Args, wantDevice.Backend.Args) || d.Backend.Log != wantDevice.Backend.Log {
+		t.Errorf("vsock device = %+v, want %+v", p.VSockDevice, wantDevice)
+	}
+
+	var smbios []string
+	for _, c := range plan.GuestCredentials(p.NICs, spec.DefaultTweaks()) {
+		smbios = append(smbios, "-smbios", "type=11,value="+c)
+	}
+	wantVMM := []string{
+		"-nodefaults", "-no-user-config", "-display", "none",
+		"-object", "memory-backend-memfd,id=mem,share=on,size=2048M",
+		"-machine", "q35,accel=kvm,memory-backend=mem",
+		"-cpu", "host",
+		"-smp", "2",
+		"-m", "2048M",
+		"-qmp", "unix:" + mp.APISocket() + ",server=on,wait=off",
+		"-chardev", "socket,id=serial,server=on,wait=off,path=" + mp.SerialSocket(),
+		"-serial", "chardev:serial",
+		"-drive", "if=pflash,unit=0,format=raw,readonly=on,file=/f/OVMF_CODE.fd",
+		"-drive", "if=pflash,unit=1,format=raw,file=" + mp.NVRAM(),
+	}
+	wantVMM = append(wantVMM, smbios...)
+	wantVMM = append(wantVMM,
+		"-drive", "if=none,id=disk0,format=qcow2,file="+mp.Disk(0, "qcow2"), "-device", "virtio-blk-pci,drive=disk0",
+		"-drive", "if=none,id=disk1,format=raw,file="+mp.Disk(1, "raw"), "-device", "virtio-blk-pci,drive=disk1",
+		"-drive", "if=none,id=seed,format=raw,readonly=on,file="+mp.Seed(), "-device", "virtio-blk-pci,drive=seed",
+		"-chardev", "socket,id=nic-eth0,path="+mp.PasstSocket("eth0"),
+		"-netdev", "vhost-user,id=nic-eth0,chardev=nic-eth0",
+		"-device", "virtio-net-pci,netdev=nic-eth0,mac="+p.NICs[0].MAC,
+		"-chardev", "socket,id=vsock,path="+mp.VSockDeviceSocket(),
+		"-device", "vhost-user-vsock-pci,chardev=vsock",
+	)
+	if p.VMM.Path != "/bin/qemu-system-x86_64" || !slices.Equal(p.VMM.Args, wantVMM) {
+		t.Errorf("vmm %s args:\n%q\nwant:\n%q", p.VMM.Path, p.VMM.Args, wantVMM)
+	}
+}
+
+func TestBuildQEMUEscapesCommas(t *testing.T) {
+	t.Parallel()
+
+	e, err := env.New(env.Dirs{State: "/s,1", Runtime: "/r,1", Cache: "/c"}, "/p/lab/Seirofile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, res := fixture(t)
+	m := &spec.Machine{Name: "a", VMM: spec.VMMQEMU, CPUs: 1, Memory: 512 * size.MiB, Disks: []spec.Disk{{Size: size.GiB}}}
+	p, err := plan.Build(e, m, res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"unix:/r,,1/" + e.ID + "/a/api.sock,server=on,wait=off",
+		"if=none,id=disk0,format=raw,file=/s,,1/envs/" + e.ID + "/machines/a/disk0.raw",
+	} {
+		if !slices.Contains(p.VMM.Args, want) {
+			t.Errorf("vmm args %q do not contain %q", p.VMM.Args, want)
+		}
+	}
+}
+
+func TestBuildQEMUWithoutFirmware(t *testing.T) {
+	t.Parallel()
+
+	e, res := fixture(t)
+	res.QEMUFirmware = nil
+	m := machine()
+	m.VMM = spec.VMMQEMU
+	if _, err := plan.Build(e, m, res); err == nil || !strings.Contains(err.Error(), "no UEFI firmware") {
+		t.Errorf("err = %v", err)
 	}
 }
 
@@ -211,6 +313,44 @@ func TestBuildLive(t *testing.T) {
 	if !slices.Equal(p.VMM.Args, wantVMM) {
 		t.Errorf("vmm args:\n%q\nwant:\n%q", p.VMM.Args, wantVMM)
 	}
+}
+
+func TestBuildLiveQEMU(t *testing.T) {
+	t.Parallel()
+
+	e, res := liveFixture(t)
+	res.QEMUFirmware = nil
+	m := liveMachine()
+	m.VMM = spec.VMMQEMU
+	p, err := plan.Build(e, m, res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mp := e.Machine("dev")
+	if p.UEFI != nil {
+		t.Errorf("uefi = %+v", p.UEFI)
+	}
+	for _, want := range [][]string{
+		{"-kernel", kernel.Path, "-initrd", initrd.Path, "-append", p.Boot.Cmdline},
+		{"-drive", "if=none,id=disk0,format=raw,file=" + mp.Disk(0, "raw"), "-device", "virtio-blk-pci,drive=disk0",
+			"-drive", "if=none,id=rootfs,format=raw,readonly=on,file=" + rootfs.Path, "-device", "virtio-blk-pci,drive=rootfs,serial=seiro-rootfs"},
+	} {
+		if !containsSeq(p.VMM.Args, want) {
+			t.Errorf("vmm args %q do not contain %q", p.VMM.Args, want)
+		}
+	}
+	if slices.ContainsFunc(p.VMM.Args, func(a string) bool { return strings.Contains(a, "pflash") }) {
+		t.Errorf("a live machine boots no firmware: %q", p.VMM.Args)
+	}
+}
+
+func containsSeq(s, seq []string) bool {
+	for i := range s {
+		if i+len(seq) <= len(s) && slices.Equal(s[i:i+len(seq)], seq) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestLiveCmdline(t *testing.T) {

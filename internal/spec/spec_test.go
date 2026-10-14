@@ -37,6 +37,11 @@ func TestValidate(t *testing.T) {
 			mutate: func(e *spec.Environment) { e.Machines[0].Name = "Bad_Name" },
 			errs:   []string{"valid hostname"},
 		},
+		"qemu": {mutate: func(e *spec.Environment) { e.Machines[0].VMM = spec.VMMQEMU }},
+		"unknown vmm": {
+			mutate: func(e *spec.Environment) { e.Machines[0].VMM = "firecracker" },
+			errs:   []string{`vmm must be "cloud-hypervisor" or "qemu"`},
+		},
 		"cpus": {
 			mutate: func(e *spec.Environment) { e.Machines[0].CPUs = 0 },
 			errs:   []string{"cpus must be between"},

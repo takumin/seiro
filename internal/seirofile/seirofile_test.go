@@ -88,7 +88,7 @@ func TestEvalDefaults(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	m := env.Machines[0]
-	if m.CPUs != 1 || m.Memory != 512*size.MiB || len(m.NICs) != 0 || len(m.Ports) != 0 || m.CloudInit != nil {
+	if m.VMM != spec.VMMCloudHypervisor || m.CPUs != 1 || m.Memory != 512*size.MiB || len(m.NICs) != 0 || len(m.Ports) != 0 || m.CloudInit != nil {
 		t.Errorf("unexpected defaults: %+v", m)
 	}
 }
@@ -114,6 +114,18 @@ machine(name = "c", disks = [disk(image = img, size = "10GiB")], tweaks = False)
 		if got := m.Tweaks; got != want[m.Name] {
 			t.Errorf("%s: tweaks = %+v, want %+v", m.Name, got, want[m.Name])
 		}
+	}
+}
+
+func TestEvalVMM(t *testing.T) {
+	t.Parallel()
+
+	env, err := eval(t, `machine(name = "a", vmm = "qemu", disks = [disk(image = img, size = "10GiB")])`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := env.Machines[0].VMM; got != spec.VMMQEMU {
+		t.Errorf("vmm = %q, want %q", got, spec.VMMQEMU)
 	}
 }
 
@@ -211,6 +223,7 @@ func TestEvalErrors(t *testing.T) {
 		"user_data key":     {src: `cloud_init(user_data = {1: "x"})`, want: "dict keys must be strings"},
 		"user_data value":   {src: `cloud_init(user_data = {"x": img})`, want: "x: cannot convert image to YAML"},
 		"file missing":      {src: `file("nope")`, want: "no such file"},
+		"vmm type":          {src: `machine(name = "a", disks = [], vmm = 1)`, want: `"vmm": got int, want string`},
 		"tweaks type":       {src: `machine(name = "a", disks = [], tweaks = {})`, want: "tweaks must be a bool or a tweaks()"},
 		"tweaks unknown":    {src: `tweaks(early_nic_name = False)`, want: "unexpected keyword argument \"early_nic_name\""},
 		"tweaks value":      {src: `tweaks(skip_network_wait = "no")`, want: `"skip_network_wait": got string, want bool`},

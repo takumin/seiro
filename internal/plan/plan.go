@@ -16,6 +16,7 @@ import (
 	"github.com/takumin/seiro/internal/disk"
 	"github.com/takumin/seiro/internal/env"
 	"github.com/takumin/seiro/internal/hostkey"
+	"github.com/takumin/seiro/internal/qemu"
 	"github.com/takumin/seiro/internal/size"
 	"github.com/takumin/seiro/internal/spec"
 )
@@ -29,9 +30,15 @@ type Image struct {
 // Resources are the host-side inputs needed to plan a machine.
 type Resources struct {
 	CloudHypervisor string
-	Passt           string
-	// Firmware is only needed by machines that boot from a disk.
-	Firmware string
+	QEMU            string
+	// VSockDevice is the vhost-user vsock device that gives machines run by
+	// QEMU the same hybrid vsock socket as cloud-hypervisor.
+	VSockDevice string
+	Passt       string
+	// Firmware is the cloud-hypervisor firmware and QEMUFirmware the UEFI
+	// firmware of QEMU. They are only needed by machines that boot from a disk.
+	Firmware     string
+	QEMUFirmware *qemu.Firmware
 	// Images maps spec.Image.Key() to the resolved image.
 	Images map[string]Image
 	// HostKey is the SSH host key of the machine being planned. It is
@@ -58,6 +65,7 @@ type Machine struct {
 	Name          string        `json:"name"`
 	Spec          *spec.Machine `json:"spec"`
 	Boot          *Boot         `json:"boot,omitempty"`
+	UEFI          *UEFI         `json:"uefi,omitempty"`
 	Disks         []Disk        `json:"disks"`
 	Seed          *Seed         `json:"seed,omitempty"`
 	NICs          []NIC         `json:"nics"`
@@ -67,6 +75,7 @@ type Machine struct {
 	ConsoleSocket string        `json:"console_socket"`
 	SerialLog     string        `json:"serial_log"`
 	VSockSocket   string        `json:"vsock_socket"`
+	VSockDevice   *VSockDevice  `json:"vsock_device,omitempty"`
 	SSH           *SSH          `json:"ssh,omitempty"`
 	Status        string        `json:"status"`
 	SuperviseLog  string        `json:"supervise_log"`
@@ -88,6 +97,21 @@ type Boot struct {
 	Cmdline string `json:"cmdline"`
 	// Rootfs is the read-only root image of a live boot.
 	Rootfs string `json:"rootfs"`
+}
+
+// UEFI is the firmware of a machine run by QEMU that boots from a disk. Vars
+// is the machine's own variable store, created from VarsTemplate.
+type UEFI struct {
+	Code         string `json:"code"`
+	Vars         string `json:"vars"`
+	VarsTemplate string `json:"vars_template"`
+}
+
+// VSockDevice is the vhost-user vsock device of a machine run by QEMU. It
+// serves the machine's hybrid vsock socket.
+type VSockDevice struct {
+	Socket  string  `json:"socket"`
+	Backend Process `json:"backend"`
 }
 
 // Seed is the cloud-init seed attached to the VM.
@@ -195,7 +219,23 @@ func Build(e *env.Env, m *spec.Machine, res Resources) (*Machine, error) {
 		}}
 	}
 
-	p.VMM = Process{Path: res.CloudHypervisor, Args: VMMArgs(p, m, res.Firmware), Log: paths.VMMLog()}
+	vmm := res.CloudHypervisor
+	if m.VMMName() == spec.VMMQEMU {
+		vmm = res.QEMU
+		if p.Boot == nil {
+			if res.QEMUFirmware == nil {
+				return nil, fmt.Errorf("machine %q: no UEFI firmware for QEMU", m.Name)
+			}
+			p.UEFI = &UEFI{Code: res.QEMUFirmware.Code, Vars: paths.NVRAM(), VarsTemplate: res.QEMUFirmware.VarsTemplate}
+		}
+		sock := paths.VSockDeviceSocket()
+		p.VSockDevice = &VSockDevice{Socket: sock, Backend: Process{
+			Path: res.VSockDevice,
+			Args: []string{"--guest-cid", strconv.Itoa(GuestCID), "--socket", sock, "--uds-path", p.VSockSocket},
+			Log:  paths.VSockDeviceLog(),
+		}}
+	}
+	p.VMM = Process{Path: vmm, Args: VMMArgs(p, m, res), Log: paths.VMMLog()}
 	return p, nil
 }
 
@@ -436,8 +476,15 @@ func GuestCredentials(nics []NIC, tw spec.Tweaks) []string {
 	return creds
 }
 
-// VMMArgs returns the cloud-hypervisor arguments for the planned machine.
-func VMMArgs(p *Machine, m *spec.Machine, firmware string) []string {
+// VMMArgs returns the arguments of the virtual machine monitor for the planned machine.
+func VMMArgs(p *Machine, m *spec.Machine, res Resources) []string {
+	if m.VMMName() == spec.VMMQEMU {
+		return qemuArgs(p, m)
+	}
+	return cloudHypervisorArgs(p, m, res.Firmware)
+}
+
+func cloudHypervisorArgs(p *Machine, m *spec.Machine, firmware string) []string {
 	memory := fmt.Sprintf("size=%dM", m.Memory/size.MiB)
 	if len(p.NICs) > 0 {
 		// vhost-user devices need guest memory shared with the backend.
@@ -488,6 +535,74 @@ func VMMArgs(p *Machine, m *spec.Machine, firmware string) []string {
 		for _, n := range p.NICs {
 			args = append(args, fmt.Sprintf("vhost_user=true,socket=%s,mac=%s,id=nic-%s", n.Socket, n.MAC, n.Name))
 		}
+	}
+	return args
+}
+
+// qemuOpt escapes a value inside a QEMU option list, where commas separate options.
+func qemuOpt(s string) string { return strings.ReplaceAll(s, ",", ",,") }
+
+func qemuArgs(p *Machine, m *spec.Machine) []string {
+	memory := fmt.Sprintf("%dM", m.Memory/size.MiB)
+	args := []string{
+		"-nodefaults", "-no-user-config", "-display", "none",
+		// vhost-user devices, including vsock, need guest memory shared with the backend.
+		"-object", "memory-backend-memfd,id=mem,share=on,size=" + memory,
+		"-machine", "q35,accel=kvm,memory-backend=mem",
+		"-cpu", "host",
+		"-smp", strconv.Itoa(m.CPUs),
+		"-m", memory,
+		"-qmp", "unix:" + qemuOpt(p.APISocket) + ",server=on,wait=off",
+		"-chardev", "socket,id=serial,server=on,wait=off,path=" + qemuOpt(p.SerialSocket),
+		"-serial", "chardev:serial",
+	}
+	if p.Boot != nil {
+		args = append(args, "-kernel", p.Boot.Kernel)
+		if p.Boot.Initrd != "" {
+			args = append(args, "-initrd", p.Boot.Initrd)
+		}
+		args = append(args, "-append", p.Boot.Cmdline)
+	} else if p.UEFI != nil {
+		args = append(args,
+			"-drive", "if=pflash,unit=0,format=raw,readonly=on,file="+qemuOpt(p.UEFI.Code),
+			"-drive", "if=pflash,unit=1,format=raw,file="+qemuOpt(p.UEFI.Vars),
+		)
+	}
+	for _, c := range GuestCredentials(p.NICs, m.Tweaks) {
+		args = append(args, "-smbios", "type=11,value="+qemuOpt(c))
+	}
+
+	// Declared disks come first, in order, so that they appear as vda, vdb, ...
+	blk := func(id, opts, serial string) {
+		dev := "virtio-blk-pci,drive=" + id
+		if serial != "" {
+			dev += ",serial=" + serial
+		}
+		args = append(args, "-drive", "if=none,id="+id+","+opts, "-device", dev)
+	}
+	for i, d := range p.Disks {
+		blk(fmt.Sprintf("disk%d", i), "format="+d.Format+",file="+qemuOpt(d.Path), "")
+	}
+	if p.Boot != nil && p.Boot.Rootfs != "" {
+		blk("rootfs", "format=raw,readonly=on,file="+qemuOpt(p.Boot.Rootfs), RootfsSerial)
+	}
+	if p.Seed != nil {
+		blk("seed", "format=raw,readonly=on,file="+qemuOpt(p.Seed.Path), "")
+	}
+
+	for _, n := range p.NICs {
+		id := "nic-" + n.Name
+		args = append(args,
+			"-chardev", "socket,id="+id+",path="+qemuOpt(n.Socket),
+			"-netdev", "vhost-user,id="+id+",chardev="+id,
+			"-device", "virtio-net-pci,netdev="+id+",mac="+n.MAC,
+		)
+	}
+	if p.VSockDevice != nil {
+		args = append(args,
+			"-chardev", "socket,id=vsock,path="+qemuOpt(p.VSockDevice.Socket),
+			"-device", "vhost-user-vsock-pci,chardev=vsock",
+		)
 	}
 	return args
 }

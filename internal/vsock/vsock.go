@@ -1,5 +1,6 @@
-// Package vsock connects to guest vsock ports through cloud-hypervisor's
-// hybrid vsock socket, which speaks the Firecracker "CONNECT <port>" protocol.
+// Package vsock connects to guest vsock ports through the hybrid vsock socket
+// of cloud-hypervisor or vhost-device-vsock, which speaks the Firecracker
+// "CONNECT <port>" protocol.
 package vsock
 
 import (

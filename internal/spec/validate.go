@@ -57,6 +57,9 @@ func (m *Machine) validate() []error {
 	if len(m.Name) > MaxMachineName || !hostnameRe.MatchString(m.Name) {
 		fail("name must be a valid hostname (lowercase letters, digits and '-', at most %d characters)", MaxMachineName)
 	}
+	if vmm := m.VMMName(); vmm != VMMCloudHypervisor && vmm != VMMQEMU {
+		fail("vmm must be %q or %q", VMMCloudHypervisor, VMMQEMU)
+	}
 	if m.CPUs < 1 || m.CPUs > MaxCPUs {
 		fail("cpus must be between 1 and %d", MaxCPUs)
 	}

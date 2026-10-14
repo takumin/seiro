@@ -1,6 +1,6 @@
 # seiro
 
-Virtual machine environments declared in Starlark, powered by cloud-hypervisor and passt
+Virtual machine environments declared in Starlark, powered by cloud-hypervisor or QEMU and passt
 
 [![CI](https://github.com/takumin/seiro/actions/workflows/ci.yml/badge.svg)](https://github.com/takumin/seiro/actions/workflows/ci.yml)
 [![Coverage](https://raw.githubusercontent.com/takumin/octocov-central/main/badges/takumin/seiro/coverage.svg)](https://github.com/takumin/seiro/actions/workflows/ci.yml)
@@ -10,7 +10,7 @@ Virtual machine environments declared in Starlark, powered by cloud-hypervisor a
 ## Overview
 
 seiro creates virtual machines from a `Seirofile` written in [Starlark](https://github.com/bazelbuild/starlark).
-Machines run on [cloud-hypervisor](https://www.cloudhypervisor.org/) and reach the outside world through [passt](https://passt.top/), without root privileges.
+Machines run on [cloud-hypervisor](https://www.cloudhypervisor.org/) or [QEMU](https://www.qemu.org/) and reach the outside world through [passt](https://passt.top/), without root privileges.
 
 ```python
 ubuntu = image(
@@ -108,10 +108,35 @@ A rebuilt live image is picked up on the next `seiro up`.
 A disk created from a local image keeps referring to it, so rebuilding that image breaks the disk; run `seiro destroy` first.
 `sha256` is optional and, when given, is checked on every `seiro up`.
 
+## QEMU
+
+Machines run on cloud-hypervisor unless they declare another VMM. `vmm = "qemu"` runs a machine on QEMU with KVM:
+
+```python
+machine(
+    name = "dev",
+    vmm = "qemu",
+    disks = [disk(image = ubuntu, size = "20GiB")],
+    nics = [nic("eth0", network = internet)],
+    cloud_init = cloud_init(user_data = {...}),
+)
+```
+
+Everything else works the same: disks, live boot, NICs and ports, cloud-init, `seiro ssh`, the console and the tweaks.
+A machine booting from a disk uses the host's UEFI firmware (OVMF), found through QEMU's firmware descriptors,
+and keeps its UEFI variables in its state directory.
+`seiro ssh` reaches the guest through [vhost-device-vsock](https://github.com/rust-vmm/vhost-device/tree/main/vhost-device-vsock),
+which seiro runs next to QEMU.
+
+The VMM of a stopped machine can be changed; its disks are kept.
+QEMU is only supported on x86_64 hosts for now.
+
 ## Requirements
 
 - Linux with KVM (`/dev/kvm` accessible by your user)
 - `cloud-hypervisor` and `passt` in `PATH` (`aqua i` installs both)
+- For machines run on QEMU: `qemu-system-x86_64`, OVMF and `vhost-device-vsock` in `PATH`
+  (e.g. the `qemu-system-x86` and `ovmf` packages, and `cargo install vhost-device-vsock`)
 
 Images and the firmware are downloaded once and cached under `$XDG_CACHE_HOME/seiro`.
 Machine state lives under `$XDG_STATE_HOME/seiro`.

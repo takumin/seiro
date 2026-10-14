@@ -9,6 +9,12 @@ import (
 // NetworkInternet is the built-in network that only guarantees outbound reachability.
 const NetworkInternet = "internet"
 
+// Virtual machine monitors that run machines.
+const (
+	VMMCloudHypervisor = "cloud-hypervisor"
+	VMMQEMU            = "qemu"
+)
+
 // Environment is the whole set of declarations in a Seirofile.
 type Environment struct {
 	Machines []*Machine `json:"machines"`
@@ -112,7 +118,10 @@ type CloudInit struct {
 
 // Machine is a virtual machine.
 type Machine struct {
-	Name      string     `json:"name"`
+	Name string `json:"name"`
+	// VMM is the virtual machine monitor that runs the machine. Plans
+	// written before it was declared run on cloud-hypervisor.
+	VMM       string     `json:"vmm,omitempty"`
 	CPUs      int        `json:"cpus"`
 	Memory    uint64     `json:"memory"`
 	Live      *Live      `json:"live,omitempty"`
@@ -155,6 +164,14 @@ func (e *Environment) Machine(name string) *Machine {
 		}
 	}
 	return nil
+}
+
+// VMMName returns the virtual machine monitor that runs the machine.
+func (m *Machine) VMMName() string {
+	if m.VMM == "" {
+		return VMMCloudHypervisor
+	}
+	return m.VMM
 }
 
 // InternetNICs returns the NICs attached to the internet network.

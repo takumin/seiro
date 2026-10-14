@@ -12,7 +12,7 @@ import (
 	"github.com/dypflying/go-qcow2lib/qcow2"
 )
 
-// Image formats understood by seiro and cloud-hypervisor.
+// Image formats understood by seiro and the VMMs.
 const (
 	FormatRaw   = "raw"
 	FormatQCOW2 = "qcow2"

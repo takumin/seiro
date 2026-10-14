@@ -186,7 +186,10 @@ func (p *MachinePaths) Status() string { return filepath.Join(p.State, "state.js
 // SerialLog is the captured serial output.
 func (p *MachinePaths) SerialLog() string { return filepath.Join(p.State, "serial.log") }
 
-// VMMLog is the cloud-hypervisor output.
+// NVRAM is the UEFI variable store of a machine run by QEMU.
+func (p *MachinePaths) NVRAM() string { return filepath.Join(p.State, "nvram.fd") }
+
+// VMMLog is the output of the virtual machine monitor.
 func (p *MachinePaths) VMMLog() string { return filepath.Join(p.State, "vmm.log") }
 
 // PasstLog is the passt output for a NIC.
@@ -203,17 +206,27 @@ func (p *MachinePaths) KnownHosts() string { return filepath.Join(p.State, "know
 // SuperviseLog is the supervisor's own log.
 func (p *MachinePaths) SuperviseLog() string { return filepath.Join(p.State, "supervise.log") }
 
-// APISocket is the cloud-hypervisor API socket.
+// VSockDeviceLog is the output of the vhost-user vsock device.
+func (p *MachinePaths) VSockDeviceLog() string { return filepath.Join(p.State, "vsock-device.log") }
+
+// APISocket is the control socket of the virtual machine monitor: the
+// cloud-hypervisor API or QEMU's QMP.
 func (p *MachinePaths) APISocket() string { return filepath.Join(p.Runtime, "api.sock") }
 
-// SerialSocket is the cloud-hypervisor serial socket.
+// SerialSocket is the serial socket of the virtual machine monitor.
 func (p *MachinePaths) SerialSocket() string { return filepath.Join(p.Runtime, "serial.sock") }
 
 // ConsoleSocket is the console socket served by the supervisor.
 func (p *MachinePaths) ConsoleSocket() string { return filepath.Join(p.Runtime, "console.sock") }
 
-// VSockSocket is the cloud-hypervisor hybrid vsock socket.
+// VSockSocket is the hybrid vsock socket, served by cloud-hypervisor or by
+// the vhost-user vsock device.
 func (p *MachinePaths) VSockSocket() string { return filepath.Join(p.Runtime, "vsock.sock") }
+
+// VSockDeviceSocket is the vhost-user socket of the vsock device.
+func (p *MachinePaths) VSockDeviceSocket() string {
+	return filepath.Join(p.Runtime, "vsock-device.sock")
+}
 
 // PasstSocket is the vhost-user socket of a NIC.
 func (p *MachinePaths) PasstSocket(nic string) string {
