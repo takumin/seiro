@@ -6,6 +6,7 @@ package supervise
 
 import (
 	"errors"
+	"log/slog"
 	"os"
 	"time"
 
@@ -34,6 +35,22 @@ type Status struct {
 	ExitCode      *int           `json:"exit_code,omitempty"`
 	ExitSignal    string         `json:"exit_signal,omitempty"`
 	Error         string         `json:"error,omitempty"`
+}
+
+// exitAttrs describes how the VMM exited, for the log: its exit code, the
+// signal that killed it, or the error waiting for it.
+func (s *Status) exitAttrs() []any {
+	var attrs []any
+	if s.ExitCode != nil {
+		attrs = append(attrs, slog.Int("exit_code", *s.ExitCode))
+	}
+	if s.ExitSignal != "" {
+		attrs = append(attrs, slog.String("signal", s.ExitSignal))
+	}
+	if s.Error != "" {
+		attrs = append(attrs, slog.String("error", s.Error))
+	}
+	return attrs
 }
 
 // ReadStatus reads state.json. It returns nil and no error when the file does not exist.

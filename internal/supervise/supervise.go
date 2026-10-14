@@ -175,7 +175,7 @@ loop:
 		}
 	}
 	s.recordExit(vmm.err)
-	slog.Info(name+" exited", slog.Any("exit_code", s.status.ExitCode), slog.String("signal", s.status.ExitSignal))
+	slog.Info(name+" exited", s.status.exitAttrs()...)
 
 	// Let the relay drain what is left into the log.
 	serial.Close() //nolint:errcheck,gosec // unblock the relay if the socket is still open
