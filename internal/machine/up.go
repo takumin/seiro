@@ -307,7 +307,8 @@ func (m *Manager) waitRunning(ctx context.Context, paths *env.MachinePaths) erro
 			return err
 		}
 		if rt != nil && rt.State == supervise.StateStopped {
-			return fmt.Errorf("failed to start: %s (see %s)", rt.Error, paths.SuperviseLog())
+			// The error names the log of the process that failed, if any.
+			return fmt.Errorf("failed to start: %s", rt.Error)
 		}
 		// The supervisor marks the machine running once the VMM says the guest runs.
 		if rt != nil && rt.State == supervise.StateRunning {

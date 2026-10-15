@@ -27,6 +27,9 @@ var (
 	StopTimeout   = 5 * time.Second
 )
 
+// ChildLogSize is the size at which the logs of the children are rotated.
+var ChildLogSize int64 = DefaultLogSize
+
 // readyInterval is how often a starting VMM is asked whether the guest runs,
 // and readyCallTimeout bounds each question.
 const (
@@ -54,7 +57,7 @@ func Run(ctx context.Context, p *plan.Machine, ready Ready) error {
 // child is a started process whose exit is observed in the background.
 type child struct {
 	cmd  *exec.Cmd
-	log  *os.File
+	log  *RotatingFile
 	done chan struct{}
 	err  error
 }
@@ -239,10 +242,26 @@ func (s *supervisor) waitReady(ctx context.Context, vmm *child) error {
 // vmmError describes a VMM that failed to start, quoting the last line of its
 // log, which usually says why.
 func vmmError(name string, err error, log string) error {
-	if line := lastLine(log); line != "" {
+	if line := lastLogLine(log); line != "" {
+		// QEMU prefixes its messages with its own name.
+		line = strings.TrimPrefix(line, name+": ")
 		return fmt.Errorf("%s: %w: %s (see %s)", name, err, line, log)
 	}
 	return fmt.Errorf("%s: %w (see %s)", name, err, log)
+}
+
+// lastLogLine returns the last non-empty line of a rotating log, looking into
+// the rotated generation if the log has just been rotated.
+func lastLogLine(path string) string {
+	line := lastLine(path)
+	if line == "" {
+		line = lastLine(path + ".1")
+	}
+	// The header start writes means the child printed nothing.
+	if strings.HasPrefix(line, logHeader) {
+		return ""
+	}
+	return line
 }
 
 // lastLine returns the last non-empty line of the file, or "" if it has none
@@ -267,13 +286,18 @@ func lastLine(path string) string {
 	return strings.TrimSpace(lines[len(lines)-1])
 }
 
+// logHeader starts the line that start writes to a log before each run.
+const logHeader = "--- "
+
+// start runs a child with its output in a rotating log, so that a child that
+// keeps printing, such as QEMU retrying a vhost-user backend, cannot fill the disk.
 func start(p plan.Process) (*child, error) {
-	log, err := os.OpenFile(p.Log, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) // #nosec G304 -- log path from the plan
+	log, err := OpenRotating(p.Log, ChildLogSize)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Fprintf(log, "--- %s %s %q\n", time.Now().UTC().Format(time.RFC3339), p.Path, p.Args) //nolint:errcheck,gosec // log header
-	cmd := exec.Command(p.Path, p.Args...)                                                    // #nosec G204 -- binaries and arguments come from the plan
+	fmt.Fprintf(log, logHeader+"%s %s %q\n", time.Now().UTC().Format(time.RFC3339), p.Path, p.Args) //nolint:errcheck,gosec // log header
+	cmd := exec.Command(p.Path, p.Args...)                                                          // #nosec G204 -- binaries and arguments come from the plan
 	cmd.Stdout = log
 	cmd.Stderr = log
 	if err := cmd.Start(); err != nil {

@@ -6,7 +6,7 @@ import (
 )
 
 // DefaultLogSize is the size at which logs are rotated.
-const DefaultLogSize = 16 << 20
+const DefaultLogSize = 8 << 20
 
 // RotatingFile is an append-only log file that keeps one rotated generation
 // (path.1) once it grows beyond Max bytes.

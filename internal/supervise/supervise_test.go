@@ -40,6 +40,8 @@ func TestHelperProcess(t *testing.T) {
 		fakeVMM(args[1:])
 	case "stuck":
 		fakeStuckVMM(args[1:])
+	case "chatty":
+		fakeChattyVMM(args[1:])
 	case "crash":
 		os.Exit(3)
 	}
@@ -92,6 +94,20 @@ func fakeStuckVMM(args []string) {
 	defer l.Close()                                                      //nolint:errcheck // helper
 	fmt.Fprintln(os.Stderr, "vmm: asking more queues than supported: 1") //nolint:errcheck // helper
 	select {}
+}
+
+// fakeChattyVMM serves a serial socket and keeps printing, prefixing its
+// messages with its own name as QEMU does.
+func fakeChattyVMM(args []string) {
+	l, err := net.Listen("unix", args[0])
+	if err != nil {
+		os.Exit(2)
+	}
+	defer l.Close() //nolint:errcheck // helper
+	name := filepath.Base(os.Args[0])
+	for i := 0; ; i++ {
+		fmt.Fprintf(os.Stderr, "%s: retrying %d%s\n", name, i, strings.Repeat(".", 100)) //nolint:errcheck // helper
+	}
 }
 
 func helper(mode string, args ...string) []string {
@@ -260,6 +276,36 @@ func TestRunGuestNeverRuns(t *testing.T) {
 	passtLog, _ := os.ReadFile(p.NICs[0].Backend.Log)
 	if !strings.Contains(string(passtLog), "passt: terminated") {
 		t.Errorf("passt was not cleaned up: %q", passtLog)
+	}
+}
+
+func TestRunChattyVMM(t *testing.T) {
+	t.Setenv("SEIRO_HELPER", "1")
+	oldReady, oldSize := supervise.ReadyTimeout, supervise.ChildLogSize
+	supervise.ReadyTimeout, supervise.ChildLogSize = 500*time.Millisecond, 64<<10
+	t.Cleanup(func() { supervise.ReadyTimeout, supervise.ChildLogSize = oldReady, oldSize })
+	p := testPlan(t, "chatty")
+
+	never := func(context.Context) (bool, error) { return false, nil }
+	err := supervise.Run(context.Background(), p, never)
+	if err == nil {
+		t.Fatal("expected the guest to never run")
+	}
+	// The log is rotated rather than growing without bound.
+	for _, path := range []string{p.VMM.Log, p.VMM.Log + ".1"} {
+		fi, statErr := os.Stat(path)
+		if statErr != nil {
+			t.Fatal(statErr)
+		}
+		if fi.Size() > supervise.ChildLogSize {
+			t.Errorf("%s is %d bytes, more than %d", path, fi.Size(), supervise.ChildLogSize)
+		}
+	}
+	// The error quotes the last line once, without repeating the name of the VMM.
+	name := filepath.Base(p.VMM.Path)
+	msg := err.Error()
+	if !strings.Contains(msg, ": retrying ") || strings.Count(msg, name+": ") != 1 {
+		t.Errorf("error = %q", msg)
 	}
 }
 
