@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -37,6 +38,8 @@ func TestHelperProcess(t *testing.T) {
 		fakePasst(args[1:])
 	case "vmm":
 		fakeVMM(args[1:])
+	case "stuck":
+		fakeStuckVMM(args[1:])
 	case "crash":
 		os.Exit(3)
 	}
@@ -77,6 +80,18 @@ func fakeVMM(args []string) {
 		}
 		fmt.Fprintf(conn, "echo: %s\n", sc.Text()) //nolint:errcheck // helper
 	}
+}
+
+// fakeStuckVMM serves a serial socket but never runs the guest, like QEMU
+// retrying a vhost-user backend that offers too few queues.
+func fakeStuckVMM(args []string) {
+	l, err := net.Listen("unix", args[0])
+	if err != nil {
+		os.Exit(2)
+	}
+	defer l.Close()                                                      //nolint:errcheck // helper
+	fmt.Fprintln(os.Stderr, "vmm: asking more queues than supported: 1") //nolint:errcheck // helper
+	select {}
 }
 
 func helper(mode string, args ...string) []string {
@@ -131,8 +146,12 @@ func TestRun(t *testing.T) {
 	t.Setenv("SEIRO_HELPER", "1")
 	p := testPlan(t, "vmm")
 
+	// The guest runs from the third question on.
+	var asked atomic.Int32
+	ready := func(context.Context) (bool, error) { return asked.Add(1) >= 3, nil }
+
 	done := make(chan error, 1)
-	go func() { done <- supervise.Run(context.Background(), p) }()
+	go func() { done <- supervise.Run(context.Background(), p, ready) }()
 
 	waitFor(t, "running state", func() bool {
 		st, _ := supervise.ReadStatus(p.Status)
@@ -202,13 +221,41 @@ func TestRunVMMFailsToStart(t *testing.T) {
 	t.Setenv("SEIRO_HELPER", "1")
 	p := testPlan(t, "crash")
 
-	err := supervise.Run(context.Background(), p)
+	err := supervise.Run(context.Background(), p, nil)
 	if err == nil || !strings.Contains(err.Error(), "exited before creating its socket") {
 		t.Fatalf("expected start failure, got %v", err)
 	}
 	st, _ := supervise.ReadStatus(p.Status)
 	if st == nil || st.State != supervise.StateStopped || st.Error == "" {
 		t.Errorf("status = %+v", st)
+	}
+	passtLog, _ := os.ReadFile(p.NICs[0].Backend.Log)
+	if !strings.Contains(string(passtLog), "passt: terminated") {
+		t.Errorf("passt was not cleaned up: %q", passtLog)
+	}
+}
+
+func TestRunGuestNeverRuns(t *testing.T) {
+	t.Setenv("SEIRO_HELPER", "1")
+	old := supervise.ReadyTimeout
+	supervise.ReadyTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { supervise.ReadyTimeout = old })
+	p := testPlan(t, "stuck")
+
+	never := func(context.Context) (bool, error) { return false, nil }
+	err := supervise.Run(context.Background(), p, never)
+	if err == nil || !strings.Contains(err.Error(), "did not start running") ||
+		!strings.Contains(err.Error(), "asking more queues than supported: 1") {
+		t.Fatalf("expected the guest to never run, got %v", err)
+	}
+	st, _ := supervise.ReadStatus(p.Status)
+	if st == nil || st.State != supervise.StateStopped || st.Error != err.Error() {
+		t.Errorf("status = %+v", st)
+	}
+	if st != nil && st.VMMPID != 0 {
+		if err := syscall.Kill(st.VMMPID, 0); err == nil {
+			t.Errorf("the VMM (pid %d) is still alive", st.VMMPID)
+		}
 	}
 	passtLog, _ := os.ReadFile(p.NICs[0].Backend.Log)
 	if !strings.Contains(string(passtLog), "passt: terminated") {

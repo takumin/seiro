@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -21,13 +23,26 @@ import (
 // Timeouts used while starting and stopping children.
 var (
 	SocketTimeout = 10 * time.Second
+	ReadyTimeout  = 15 * time.Second
 	StopTimeout   = 5 * time.Second
 )
 
+// readyInterval is how often a starting VMM is asked whether the guest runs,
+// and readyCallTimeout bounds each question.
+const (
+	readyInterval    = 100 * time.Millisecond
+	readyCallTimeout = 2 * time.Second
+)
+
+// Ready reports whether the guest is running, asking the VMM through its
+// control socket.
+type Ready func(ctx context.Context) (bool, error)
+
 // Run supervises the planned machine until the VMM exits. It is the body of the
-// hidden "seiro supervise" command.
-func Run(ctx context.Context, p *plan.Machine) error {
-	s := &supervisor{plan: p, status: &Status{
+// hidden "seiro supervise" command. The machine is running once ready says so;
+// a nil ready takes the serial socket of the VMM as enough.
+func Run(ctx context.Context, p *plan.Machine, ready Ready) error {
+	s := &supervisor{plan: p, ready: ready, status: &Status{
 		State:         StateStarting,
 		SupervisorPID: os.Getpid(),
 		BackendPIDs:   map[string]int{},
@@ -55,6 +70,7 @@ func (c *child) exited() bool {
 
 type supervisor struct {
 	plan     *plan.Machine
+	ready    Ready
 	status   *Status
 	backends []*child
 }
@@ -123,7 +139,7 @@ func (s *supervisor) run(ctx context.Context) (err error) {
 	}
 
 	if err := waitSocket(s.plan.SerialSocket, vmm); err != nil {
-		return abort(fmt.Errorf("%s: %w (see %s)", name, err, s.plan.VMM.Log))
+		return abort(vmmError(name, err, s.plan.VMM.Log))
 	}
 	serial, err := net.Dial("unix", s.plan.SerialSocket)
 	if err != nil {
@@ -151,6 +167,15 @@ func (s *supervisor) run(ctx context.Context) (err error) {
 		}
 	})
 	go relay.Serve(console) //nolint:errcheck // stops when the listener is closed
+
+	// A VMM may create its sockets and still never run the guest, such as
+	// QEMU retrying a vhost-user backend it cannot use.
+	if err := s.waitReady(ctx, vmm); err != nil {
+		err = abort(vmmError(name, err, s.plan.VMM.Log))
+		serial.Close() //nolint:errcheck,gosec // unblock the relay
+		wg.Wait()
+		return err
+	}
 
 	s.status.State = StateRunning
 	if err := s.writeStatus(); err != nil {
@@ -181,6 +206,65 @@ loop:
 	serial.Close() //nolint:errcheck,gosec // unblock the relay if the socket is still open
 	wg.Wait()
 	return nil
+}
+
+// waitReady waits until the guest runs, failing early if the VMM exits.
+func (s *supervisor) waitReady(ctx context.Context, vmm *child) error {
+	if s.ready == nil {
+		return nil
+	}
+	deadline := time.Now().Add(ReadyTimeout)
+	for {
+		callCtx, cancel := context.WithTimeout(ctx, readyCallTimeout)
+		ok, err := s.ready(callCtx)
+		cancel()
+		if err == nil && ok {
+			return nil
+		}
+		if vmm.exited() {
+			return errors.New("exited before the guest started running")
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the guest did not start running within %s", ReadyTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-vmm.done:
+		case <-time.After(readyInterval):
+		}
+	}
+}
+
+// vmmError describes a VMM that failed to start, quoting the last line of its
+// log, which usually says why.
+func vmmError(name string, err error, log string) error {
+	if line := lastLine(log); line != "" {
+		return fmt.Errorf("%s: %w: %s (see %s)", name, err, line, log)
+	}
+	return fmt.Errorf("%s: %w (see %s)", name, err, log)
+}
+
+// lastLine returns the last non-empty line of the file, or "" if it has none
+// or cannot be read.
+func lastLine(path string) string {
+	f, err := os.Open(path) // #nosec G304 -- log path from the plan
+	if err != nil {
+		return ""
+	}
+	defer f.Close() //nolint:errcheck // read-only
+	const tail = 4096
+	if fi, err := f.Stat(); err == nil && fi.Size() > tail {
+		if _, err := f.Seek(-tail, io.SeekEnd); err != nil {
+			return ""
+		}
+	}
+	b, err := io.ReadAll(f)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
 }
 
 func start(p plan.Process) (*child, error) {

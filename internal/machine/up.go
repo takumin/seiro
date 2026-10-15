@@ -224,7 +224,7 @@ func (m *Manager) up(ctx context.Context, mc *spec.Machine, res plan.Resources) 
 	if err := m.spawnSupervisor(paths); err != nil {
 		return err
 	}
-	if err := m.waitRunning(ctx, paths, p); err != nil {
+	if err := m.waitRunning(ctx, paths); err != nil {
 		return err
 	}
 	fmt.Fprintf(m.Out, "%s: running%s\n", mc.Name, describePorts(mc.Ports)) //nolint:errcheck // progress output
@@ -299,7 +299,7 @@ func (m *Manager) spawnSupervisor(paths *env.MachinePaths) error {
 	return cmd.Process.Release()
 }
 
-func (m *Manager) waitRunning(ctx context.Context, paths *env.MachinePaths, p *plan.Machine) error {
+func (m *Manager) waitRunning(ctx context.Context, paths *env.MachinePaths) error {
 	deadline := time.Now().Add(m.StartTimeout)
 	for time.Now().Before(deadline) {
 		rt, err := supervise.ReadStatus(paths.Status())
@@ -309,10 +309,9 @@ func (m *Manager) waitRunning(ctx context.Context, paths *env.MachinePaths, p *p
 		if rt != nil && rt.State == supervise.StateStopped {
 			return fmt.Errorf("failed to start: %s (see %s)", rt.Error, paths.SuperviseLog())
 		}
+		// The supervisor marks the machine running once the VMM says the guest runs.
 		if rt != nil && rt.State == supervise.StateRunning {
-			if ok, err := controlOf(p).Running(ctx); err == nil && ok {
-				return nil
-			}
+			return nil
 		}
 		select {
 		case <-ctx.Done():

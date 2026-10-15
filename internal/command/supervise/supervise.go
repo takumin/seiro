@@ -8,6 +8,7 @@ import (
 
 	"github.com/takumin/seiro/internal/config"
 	"github.com/takumin/seiro/internal/env"
+	"github.com/takumin/seiro/internal/machine"
 	"github.com/takumin/seiro/internal/plan"
 	"github.com/takumin/seiro/internal/supervise"
 )
@@ -29,7 +30,7 @@ func NewCommand(cfg *config.Config) *cli.Command {
 			}
 			// Signals are handled by the supervisor itself so that it can stop
 			// the VM and clean up, so do not let them cancel the context.
-			return supervise.Run(context.WithoutCancel(ctx), &p)
+			return supervise.Run(context.WithoutCancel(ctx), &p, machine.Running(&p))
 		},
 	}
 }

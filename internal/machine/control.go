@@ -29,6 +29,12 @@ func controlOf(p *plan.Machine) control {
 	return chControl{chapi.New(p.APISocket)}
 }
 
+// Running returns how the supervisor of the planned machine asks whether the
+// guest runs.
+func Running(p *plan.Machine) func(ctx context.Context) (bool, error) {
+	return controlOf(p).Running
+}
+
 // controlAt returns the control of the machine as it was last started.
 func controlAt(paths *env.MachinePaths) control {
 	var p plan.Machine
