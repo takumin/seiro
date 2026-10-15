@@ -63,7 +63,7 @@ func fakeQMP(t *testing.T, reply func(cmd string) string) (string, func() []stri
 					break
 				}
 				fmt.Fprintln(conn, `{"event": "TEST", "timestamp": {}}`) //nolint:errcheck // test
-				fmt.Fprintln(conn, resp)                                  //nolint:errcheck // test
+				fmt.Fprintln(conn, resp)                                 //nolint:errcheck // test
 			}
 			conn.Close() //nolint:errcheck,gosec // test
 		}

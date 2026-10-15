@@ -270,7 +270,7 @@ func copyFile(dst, src string) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close() //nolint:errcheck // read-only
+	defer in.Close()                                                       //nolint:errcheck // read-only
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G304 -- path inside the machine state directory
 	if err != nil {
 		return err
