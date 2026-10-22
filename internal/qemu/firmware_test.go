@@ -19,14 +19,14 @@ func writeDescriptor(t *testing.T, dir, name, code, vars, arch string, features 
 		quoted[i] = `"` + f + `"`
 	}
 	data := `{
-  "interface-types": ["uefi"],
-  "mapping": {
-    "device": "flash",
-    "executable": {"filename": "` + code + `", "format": "raw"},
-    "nvram-template": {"filename": "` + vars + `", "format": "raw"}
-  },
-  "targets": [{"architecture": "` + arch + `", "machines": ["pc-i440fx-*", "pc-q35-*"]}],
-  "features": [` + strings.Join(quoted, ",") + `]
+	"interface-types": ["uefi"],
+	"mapping": {
+		"device": "flash",
+		"executable": {"filename": "` + code + `", "format": "raw"},
+		"nvram-template": {"filename": "` + vars + `", "format": "raw"}
+	},
+	"targets": [{"architecture": "` + arch + `", "machines": ["pc-i440fx-*", "pc-q35-*"]}],
+	"features": [` + strings.Join(quoted, ",") + `]
 }`
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o600); err != nil {
 		t.Fatal(err)
