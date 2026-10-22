@@ -301,13 +301,13 @@ func start(p plan.Process) (*child, error) {
 	cmd.Stdout = log
 	cmd.Stderr = log
 	if err := cmd.Start(); err != nil {
-		log.Close() //nolint:errcheck,gosec // already failing
+		_ = log.Close() // already failing
 		return nil, err
 	}
 	c := &child{cmd: cmd, log: log, done: make(chan struct{})}
 	go func() {
 		c.err = cmd.Wait()
-		log.Close() //nolint:errcheck,gosec // log file
+		_ = log.Close() // log file
 		close(c.done)
 	}()
 	return c, nil
