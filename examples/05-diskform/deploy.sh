@@ -45,6 +45,7 @@ install -d "$target/etc/initramfs-tools/conf.d"
 echo 'UMASK=0077' > "$target/etc/initramfs-tools/conf.d/umask"
 
 echo deployed > "$target/etc/hostname"
+printf '127.0.0.1 localhost\n127.0.1.1 deployed\n' > "$target/etc/hosts"
 install -d "$target/etc/default"
 cat > "$target/etc/default/grub" << 'GRUB'
 GRUB_DEFAULT=0
@@ -81,7 +82,7 @@ chroot "$target" chown -R "$user:$user" "/home/$user/.ssh"
 echo "$user ALL=(ALL) NOPASSWD:ALL" > "$target/etc/sudoers.d/$user"
 chmod 0440 "$target/etc/sudoers.d/$user"
 
-# What the verification after the reboot reads.
+# What verify.sh reads on the deployed system.
 install -m 0755 /usr/local/sbin/diskform "$target/usr/local/sbin/diskform"
 install -d "$target/etc/diskform"
 install -m 0644 "$declaration" "$target/etc/diskform/diskform.yaml"

@@ -1,6 +1,6 @@
 ---
-# Deploys Debian with diskform and debootstrap from cloud-init, reboots into
-# it and checks the result (examples/05-diskform).
+# Deploys Debian with diskform and debootstrap from cloud-init, boots it and
+# checks the result (examples/05-diskform).
 name: E2E diskform
 on:
   push:

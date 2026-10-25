@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run as root on the deployed system after the reboot. It checks that the
+# Run as root on the deployed system once it has booted. It checks that the
 # machine booted the Debian that deploy.sh installed, from the storage of
 # diskform.yaml, and that diskform finds that storage configured as declared.
 set -euo pipefail
@@ -36,7 +36,7 @@ check "/var" "$(findmnt -no SOURCE /var) $(findmnt -no FSTYPE /var)" "/dev/mappe
 check "/srv" "$(findmnt -no FSTYPE /srv) $(findmnt -no FSROOT /srv)" "btrfs /@srv"
 check "/srv/.snapshots" "$(findmnt -no FSTYPE /srv/.snapshots) $(findmnt -no FSROOT /srv/.snapshots)" "btrfs /@snapshots"
 check "swap" "$(swapon --show=NAME --noheadings | xargs -r readlink -f)" "$(readlink -f /dev/mapper/vg0-swap)"
-check "LUKS" "$(lsblk -no TYPE "$(readlink -f /dev/mapper/cryptsys)")" "crypt"
+check "LUKS" "$(lsblk -dno TYPE "$(readlink -f /dev/mapper/cryptsys)")" "crypt"
 check "btrfs data profile" "$(btrfs filesystem df /srv | sed -n 's/^Data, \([^:]*\):.*/\1/p')" "RAID1"
 check "btrfs metadata profile" "$(btrfs filesystem df /srv | sed -n 's/^Metadata, \([^:]*\):.*/\1/p')" "RAID1"
 check "btrfs devices" "$(btrfs filesystem show --raw /srv | grep -c 'devid')" "2"
