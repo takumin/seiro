@@ -17,6 +17,7 @@ head -c 64 /dev/urandom > /run/keys/sys.key
 chmod 0400 /run/keys/sys.key
 
 diskform apply --auto-approve "$declaration"
+mkdir -p "$target"
 diskform mount --root "$target" "$declaration"
 
 debootstrap --variant=minbase \
