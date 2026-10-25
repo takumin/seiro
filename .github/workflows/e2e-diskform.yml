@@ -1,0 +1,151 @@
+---
+# Deploys Debian with diskform and debootstrap from cloud-init, reboots into
+# it and checks the result (examples/05-diskform).
+name: E2E diskform
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+  workflow_dispatch:
+permissions: {}
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+concurrency:
+  group: e2e-diskform-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+env:
+  VHOST_DEVICE_VSOCK_VERSION: 0.3.0
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - name: Checkout diskform
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: takumin/diskform
+        path: .e2e/diskform
+        persist-credentials: false
+    - name: Setup aqua
+      uses: aquaproj/aqua-installer@611554c6f0137ba41c8dd15aca8bee82504ea461 # v4.1.1
+      with:
+        aqua_version: v2.65.2
+    - name: Restore go mod cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        key: deps-${{ hashFiles('**/go.sum') }}
+        restore-keys: |-
+          deps-
+        path: ~/go/pkg/mod/
+    - name: Restore aqua cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        key: aqua-${{ hashFiles('.aqua/**/*.yaml', '.aqua/**/*.yml') }}
+        restore-keys: |-
+          aqua-
+        path: ~/.local/share/aquaproj-aqua/
+    - name: Restore vhost-device-vsock cache
+      id: vsock-cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        key: vhost-device-vsock-${{ env.VHOST_DEVICE_VSOCK_VERSION }}
+        path: ~/.cargo/bin/vhost-device-vsock
+    - name: Restore seiro image cache
+      id: seiro-cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        key: seiro-e2e-diskform-${{ hashFiles('examples/05-diskform/Seirofile') }}
+        path: ~/.cache/seiro/
+    - name: Let the runner use KVM
+      run: |-
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+          | sudo tee /etc/udev/rules.d/99-kvm.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+    - name: Install QEMU and OVMF
+      run: |-
+        sudo apt-get update
+        sudo apt-get install --yes --no-install-recommends qemu-system-x86 ovmf
+    - name: Install passt and Go
+      run: |-
+        aqua install --tags vm
+        aqua install --tags go
+    - name: Install vhost-device-vsock
+      if: steps.vsock-cache.outputs.cache-hit != 'true'
+      run: |-
+        rustup toolchain install stable --profile minimal
+        cargo +stable install --locked vhost-device-vsock --version "$VHOST_DEVICE_VSOCK_VERSION"
+    - name: Build seiro
+      run: |-
+        mkdir -p "$RUNNER_TEMP/bin"
+        go build -trimpath -o "$RUNNER_TEMP/bin/seiro" .
+        echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+    - name: Build diskform
+      working-directory: .e2e/diskform
+      run: |-
+        rustup toolchain install stable --profile minimal
+        cargo +stable build --release --locked
+        gzip -9 -c target/release/diskform | base64 -w0 >"$GITHUB_WORKSPACE/examples/05-diskform/diskform.gz.b64"
+    - name: Create the SSH key
+      run: |-
+        install -d -m 0700 ~/.ssh
+        ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/id_ed25519
+        cp ~/.ssh/id_ed25519.pub ~/.ssh/authorized_keys
+    - name: Start the installer
+      working-directory: examples/05-diskform
+      run: |-
+        seiro up
+    - name: Wait for the deployed system
+      working-directory: examples/05-diskform
+      timeout-minutes: 40
+      run: |-
+        # The installer answers SSH once cloud-init has run deploy.sh, and
+        # reboots shortly after if it succeeded. The deployed Debian answers
+        # after the reboot.
+        state() {
+          timeout 60 seiro ssh deploy -o BatchMode=yes sh -s <state.sh 2>/dev/null || true
+        }
+        while :; do
+          s=$(state)
+          echo "$(date -u +%T) ${s:-no answer}"
+          case "$s" in
+          deployed) break ;;
+          done | error | degraded*)
+            echo "::error::cloud-init finished without deploying ($s)"
+            timeout 60 seiro ssh deploy -o BatchMode=yes sudo cat /var/log/cloud-init-output.log </dev/null || true
+            exit 1
+            ;;
+          esac
+          sleep 15
+        done
+    - name: Verify the deployed system
+      working-directory: examples/05-diskform
+      run: |-
+        seiro ssh deploy -o BatchMode=yes sudo bash -s <verify.sh
+    - name: Show the serial output
+      if: failure()
+      working-directory: examples/05-diskform
+      run: |-
+        seiro status || true
+        seiro logs deploy || true
+    - name: Save vhost-device-vsock cache
+      if: github.ref == 'refs/heads/main' && steps.vsock-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        key: ${{ steps.vsock-cache.outputs.cache-primary-key }}
+        path: ~/.cargo/bin/vhost-device-vsock
+    - name: Save seiro image cache
+      if: github.ref == 'refs/heads/main' && steps.seiro-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        key: ${{ steps.seiro-cache.outputs.cache-primary-key }}
+        path: ~/.cache/seiro/

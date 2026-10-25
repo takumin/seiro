@@ -1,0 +1,101 @@
+---
+# The storage of diskform's own example (examples/luks-lvm-btrfs-raid1),
+# scaled down to the blank disks of the Seirofile next to this file.
+# The disks are matched by their kernel names because seiro gives virtual
+# disks no serial; diskform warns about it.
+version: 1
+
+disk:
+  sys0:
+    match:
+      path: /dev/vdb
+      min_size: 16GiB
+    table: gpt
+    partitions:
+    - name: esp
+      size: 512MiB
+      type: esp
+      label: esp
+    - name: boot
+      size: 1GiB
+      label: boot
+    - name: crypt
+      size: 100%
+      label: cryptsys
+  data0:
+    match:
+      path: /dev/vdc
+      min_size: 4GiB
+    table: gpt
+    partitions:
+    - name: data0
+      size: 100%
+      label: data0
+  data1:
+    match:
+      path: /dev/vdd
+      min_size: 4GiB
+    table: gpt
+    partitions:
+    - name: data1
+      size: 100%
+      label: data1
+
+luks:
+  cryptsys:
+    device: disk.sys0.crypt
+    keyfile: /run/keys/sys.key
+
+lvm:
+  vg0:
+    devices: [luks.cryptsys]
+    volumes:
+      root:
+        size: 8GiB
+      swap:
+        size: 1GiB
+      var:
+        size: 100%
+
+filesystem:
+  efi:
+    device: disk.sys0.esp
+    format: vfat
+    label: EFI
+    mount: /boot/efi
+    mount_options: [umask=0077]
+  boot:
+    device: disk.sys0.boot
+    format: ext4
+    label: boot
+    mount: /boot
+  root:
+    device: lvm.vg0.root
+    format: ext4
+    label: root
+    mount: /
+  var:
+    device: lvm.vg0.var
+    format: xfs
+    label: var
+    mount: /var
+  data:
+    devices: [disk.data0.data0, disk.data1.data1]
+    format: btrfs
+    label: data
+    mount_options: ["compress=zstd:3"]
+    btrfs:
+      data_profile: raid1
+      metadata_profile: raid1
+    subvolumes:
+      srv:
+        path: "@srv"
+        mount: /srv
+      snapshots:
+        path: "@snapshots"
+        mount: /srv/.snapshots
+
+swap:
+  main:
+    device: lvm.vg0.swap
+    label: swap

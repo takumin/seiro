@@ -1,0 +1,50 @@
+# vim: ft=starlark :
+
+# Deploys Debian onto storage built by diskform, then boots it.
+#
+# The installer is the Ubuntu cloud image on vda. cloud-init runs deploy.sh,
+# which builds diskform.yaml on the blank disks vdb, vdc and vdd, installs
+# Debian into it with debootstrap and reboots. The machine runs on QEMU, whose
+# UEFI variables seiro keeps, so the firmware boots the deployed Debian after
+# the reboot. The E2E diskform workflow waits for it with state.sh and
+# checks it with verify.sh, both run over `seiro ssh deploy`.
+#
+# diskform.gz.b64 is the diskform binary, compressed and base64-encoded:
+#   gzip -9 -c path/to/diskform | base64 -w0 >diskform.gz.b64
+
+ubuntu = image(
+    url = "https://cloud-images.ubuntu.com/releases/26.04/release-20260927/ubuntu-26.04-server-cloudimg-amd64.img",
+    sha256 = "8800651811af9a85465ad1d552add729947bb16488dddb4a9b5305a3d97332b2",
+)
+
+machine(
+    name = "deploy",
+    vmm = "qemu",
+    cpus = 2,
+    memory = "2GiB",
+    disks = [
+        disk(image = ubuntu, size = "8GiB"),
+        disk(size = "16GiB"),
+        disk(size = "4GiB"),
+        disk(size = "4GiB"),
+    ],
+    nics = [
+        nic("eth0", network = internet),
+    ],
+    cloud_init = cloud_init(user_data = {
+        "users": [{
+            "name": "ops",
+            "sudo": "ALL=(ALL) NOPASSWD:ALL",
+            "shell": "/bin/bash",
+            "ssh_authorized_keys": [file("~/.ssh/authorized_keys")],
+        }],
+        "packages": ["debootstrap", "debian-archive-keyring"],
+        "write_files": [
+            {"path": "/usr/local/sbin/diskform", "encoding": "gz+b64", "content": file("diskform.gz.b64"), "permissions": "0755"},
+            {"path": "/etc/diskform/diskform.yaml", "content": file("diskform.yaml")},
+            {"path": "/usr/local/sbin/deploy", "content": file("deploy.sh"), "permissions": "0755"},
+        ],
+        "runcmd": [["/usr/local/sbin/deploy"]],
+        "power_state": {"mode": "reboot", "condition": "test -f /run/deploy-ok"},
+    }),
+)
