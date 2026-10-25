@@ -140,9 +140,14 @@ func (s *supervisor) run(ctx context.Context) (err error) {
 		<-vmm.done
 		return err
 	}
+	// abortVMM quotes the log only after the VMM has stopped and its output
+	// has been copied into the log, so that the quoted line is complete.
+	abortVMM := func(err error) error {
+		return vmmError(name, abort(err), s.plan.VMM.Log)
+	}
 
 	if err := waitSocket(s.plan.SerialSocket, vmm); err != nil {
-		return abort(vmmError(name, err, s.plan.VMM.Log))
+		return abortVMM(err)
 	}
 	serial, err := net.Dial("unix", s.plan.SerialSocket)
 	if err != nil {
@@ -174,7 +179,7 @@ func (s *supervisor) run(ctx context.Context) (err error) {
 	// A VMM may create its sockets and still never run the guest, such as
 	// QEMU retrying a vhost-user backend it cannot use.
 	if err := s.waitReady(ctx, vmm); err != nil {
-		err = abort(vmmError(name, err, s.plan.VMM.Log))
+		err = abortVMM(err)
 		serial.Close() //nolint:errcheck,gosec // unblock the relay
 		wg.Wait()
 		return err
