@@ -104,27 +104,37 @@ jobs:
       working-directory: examples/05-diskform
       run: |-
         seiro up
-    - name: Wait for the deployed system
+    - name: Wait for the installer to power off
       working-directory: examples/05-diskform
       timeout-minutes: 40
       run: |-
-        # The installer answers SSH once cloud-init has run deploy.sh, and
-        # reboots shortly after if it succeeded. The deployed Debian answers
-        # after the reboot.
-        state() {
-          timeout 60 seiro ssh deploy -o BatchMode=yes sh -s <state.sh 2>/dev/null || true
-        }
-        while :; do
-          s=$(state)
+        # cloud-init powers the installer off once deploy.sh has succeeded.
+        # Otherwise the installer stays up and answers SSH once cloud-init
+        # has finished.
+        while [[ $(seiro status | awk '$1 == "deploy" { print $2 }') != stopped ]]; do
+          s=$(timeout 60 seiro ssh deploy -o BatchMode=yes sh -s <state.sh 2>/dev/null || true)
           echo "$(date -u +%T) ${s:-no answer}"
           case "$s" in
-          deployed) break ;;
           done | error | degraded*)
             echo "::error::cloud-init finished without deploying ($s)"
             timeout 60 seiro ssh deploy -o BatchMode=yes sudo cat /var/log/cloud-init-output.log </dev/null || true
             exit 1
             ;;
           esac
+          sleep 15
+        done
+    - name: Start the deployed system
+      working-directory: examples/05-diskform
+      run: |-
+        # The UEFI variables that grub-install wrote are kept in the
+        # machine's state, so the firmware boots the deployed Debian.
+        seiro up
+    - name: Wait for the deployed system
+      working-directory: examples/05-diskform
+      timeout-minutes: 10
+      run: |-
+        until [[ $(timeout 60 seiro ssh deploy -o BatchMode=yes sh -s <state.sh 2>/dev/null || true) == deployed ]]; do
+          echo "$(date -u +%T) waiting"
           sleep 15
         done
     - name: Verify the deployed system
@@ -137,6 +147,9 @@ jobs:
       run: |-
         seiro status || true
         seiro logs deploy || true
+        seiro logs --vmm deploy || true
+        seiro logs --supervise deploy || true
+        find "${XDG_STATE_HOME:-$HOME/.local/state}/seiro" -name '*vsock*.log' -exec tail -n 100 {} + || true
     - name: Save vhost-device-vsock cache
       if: github.ref == 'refs/heads/main' && steps.vsock-cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

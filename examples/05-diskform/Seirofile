@@ -4,10 +4,10 @@
 #
 # The installer is the Ubuntu cloud image on vda. cloud-init runs deploy.sh,
 # which builds diskform.yaml on the blank disks vdb, vdc and vdd, installs
-# Debian into it with debootstrap and reboots. The machine runs on QEMU, whose
-# UEFI variables seiro keeps, so the firmware boots the deployed Debian after
-# the reboot. The E2E diskform workflow waits for it with state.sh and
-# checks it with verify.sh, both run over `seiro ssh deploy`.
+# Debian into it with debootstrap and powers off. The machine runs on QEMU,
+# whose UEFI variables seiro keeps, so the firmware boots the deployed Debian
+# on the next `seiro up`. The E2E diskform workflow waits for it with state.sh
+# and checks it with verify.sh, both run over `seiro ssh deploy`.
 #
 # diskform.gz.b64 is the diskform binary, compressed and base64-encoded:
 #   gzip -9 -c path/to/diskform | base64 -w0 >diskform.gz.b64
@@ -45,6 +45,6 @@ machine(
             {"path": "/usr/local/sbin/deploy", "content": file("deploy.sh"), "permissions": "0755"},
         ],
         "runcmd": [["/usr/local/sbin/deploy"]],
-        "power_state": {"mode": "reboot", "condition": "test -f /run/deploy-ok"},
+        "power_state": {"mode": "poweroff", "condition": "test -f /run/deploy-ok"},
     }),
 )

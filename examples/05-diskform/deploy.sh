@@ -2,7 +2,7 @@
 # Run by cloud-init on the installer (the Ubuntu cloud image on vda).
 # It builds the storage of diskform.yaml on the blank disks, installs Debian
 # into it with debootstrap and makes the firmware boot it next. On success it
-# leaves /run/deploy-ok, which lets cloud-init's power_state reboot.
+# leaves /run/deploy-ok, which lets cloud-init's power_state power off.
 set -euxo pipefail
 
 declaration=/etc/diskform/diskform.yaml
@@ -21,7 +21,7 @@ mkdir -p "$target"
 diskform mount --root "$target" "$declaration"
 
 debootstrap --variant=minbase \
-	--include=systemd-sysv,udev,kmod,ca-certificates,cryptsetup,cryptsetup-initramfs,lvm2,btrfs-progs,xfsprogs,dosfstools,openssh-server,sudo,efibootmgr \
+	--include=systemd-sysv,udev,kmod,ca-certificates,e2fsprogs,cryptsetup,cryptsetup-initramfs,lvm2,btrfs-progs,xfsprogs,dosfstools,openssh-server,sudo,efibootmgr \
 	trixie "$target" http://deb.debian.org/debian
 
 # What the deployed system mounts and unlocks at boot, which diskform does
