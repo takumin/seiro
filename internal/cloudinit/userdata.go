@@ -10,7 +10,7 @@ import (
 	"net/textproto"
 	"strings"
 
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // Content types of user-data parts. cloud-init detects the type of a
