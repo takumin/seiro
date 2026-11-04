@@ -6,7 +6,7 @@ import (
 	"strconv"
 
 	"go.starlark.net/starlark"
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // toYAML renders a Starlark value as a YAML document, keeping dict insertion order.
