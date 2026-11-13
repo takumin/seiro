@@ -8,7 +8,7 @@ require (
 	github.com/urfave/cli/v3 v3.14.0
 	go.starlark.net v0.0.0-20261021141710-4f4267fb140d
 	go.yaml.in/yaml/v4 v4.0.0
-	golang.org/x/crypto v0.58.0
+	golang.org/x/crypto v0.59.0
 	golang.org/x/term v0.48.0
 )
 
